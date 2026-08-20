@@ -1,0 +1,51 @@
+name: Keep Supabase Alive
+
+# Mantém o projeto Supabase ativo no plano gratuito.
+# O Supabase pausa projetos após ~7 dias sem atividade; este workflow
+# faz uma consulta mínima a cada 3 dias, com folga de sobra.
+
+on:
+  schedule:
+    # A cada 3 dias, às 12:00 UTC (09:00 no horário de Brasília).
+    # Formato cron: minuto hora dia-do-mês mês dia-da-semana
+    - cron: "0 12 */3 * *"
+  # Permite rodar manualmente pela aba Actions (botão "Run workflow").
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Consultar Supabase (mantém o projeto ativo)
+        run: |
+          SUPABASE_URL="https://atbkjmvogkuekrcoevkn.supabase.co"
+          TABELA="dts"
+          # Chave ANON (publishable) — pública por natureza, já vai no index.html do app.
+          # NUNCA colocar a service_role aqui.
+          ANON_KEY="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImF0YmtqbXZvZ2t1ZWtyY29ldmtuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODcyNDM3MTYsImV4cCI6MjEwMjgxOTcxNn0.WkQUYjvcivCGo3oxDLlVFFXXelxZGb80SMauWuF0VRE"
+
+          echo "Consultando: $SUPABASE_URL/rest/v1/$TABELA?select=id&limit=1"
+
+          # -s: silencioso | -o: guarda o corpo da resposta | -w: imprime o código HTTP
+          STATUS=$(curl -s -o resposta.txt -w "%{http_code}" \
+            "$SUPABASE_URL/rest/v1/$TABELA?select=id&limit=1" \
+            -H "apikey: $ANON_KEY" \
+            -H "Authorization: Bearer $ANON_KEY")
+
+          echo "-----------------------------------------"
+          echo "STATUS HTTP: $STATUS"
+          echo "RESPOSTA:"
+          cat resposta.txt
+          echo ""
+          echo "-----------------------------------------"
+
+          # Falha o workflow se não for 200, para aparecer o X vermelho no Actions.
+          if [ "$STATUS" = "200" ]; then
+            echo "OK — projeto Supabase segue ativo."
+          else
+            echo "ERRO — status $STATUS. Veja o significado:"
+            echo "  401 = chave anon errada ou expirada"
+            echo "  404 = URL do projeto ou nome da tabela errados"
+            echo "  000 = falha de rede / projeto pausado ou apagado"
+            exit 1
+          fi
