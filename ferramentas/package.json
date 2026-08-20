@@ -8,7 +8,8 @@
     "servidor": "node servidor.js",
     "sri": "node sri.js",
     "modelos": "node modelos.js",
-    "modelos:gravar": "node modelos.js --gravar"
+    "modelos:gravar": "node modelos.js --gravar",
+    "construir": "node construir.js"
   },
   "dependencies": {
     "@babel/core": "^7.25.0",
