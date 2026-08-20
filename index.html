@@ -160,7 +160,7 @@ const {
   useRef,
   useEffect
 } = React;
-const APP_VERSION = "V4";
+const APP_VERSION = "V5";
 
 // ===== CONFIG SUPABASE =====
 const SUPABASE_URL = "https://atbkjmvogkuekrcoevkn.supabase.co";
@@ -2664,6 +2664,13 @@ function PainelAdm({
   const [senhaNova, setSenhaNova] = useState("");
   const [senhaConf, setSenhaConf] = useState("");
   const [msgSenha, setMsgSenha] = useState("");
+  // ---- verificação em duas etapas ----
+  const [fatores, setFatores] = useState(null); // null = ainda consultando
+  const [inscrevendo, setInscrevendo] = useState(null); // {factorId, uri}
+  const [codigo2fa, setCodigo2fa] = useState("");
+  const [msg2fa, setMsg2fa] = useState("");
+  const [desafio, setDesafio] = useState(null); // login pedindo o código
+
   useEffect(() => {
     let vivo = true;
     supa.auth.getSession().then(({
@@ -2706,6 +2713,23 @@ function PainelAdm({
       eventos.forEach(e => window.removeEventListener(e, reiniciar));
     };
   }, [sessao]);
+  useEffect(() => {
+    if (sessao) carregarFatores();
+  }, [sessao]);
+
+  // desenha o QR do TOTP com a mesma biblioteca ja usada no compartilhamento
+  const caixaQR = useRef(null);
+  useEffect(() => {
+    if (!inscrevendo || !inscrevendo.uri || !caixaQR.current) return;
+    caixaQR.current.innerHTML = "";
+    try {
+      new QRCode(caixaQR.current, {
+        text: inscrevendo.uri,
+        width: 180,
+        height: 180
+      });
+    } catch (_) {}
+  }, [inscrevendo]);
   async function entrar() {
     if (!email.trim() || !senha) {
       setMsg("Informe e-mail e senha.");
@@ -2725,6 +2749,24 @@ function PainelAdm({
       return;
     }
     setSenha("");
+    // se a conta tem 2FA, a sessão ainda não vale: falta o código
+    try {
+      const {
+        data: aal
+      } = await supa.auth.mfa.getAuthenticatorAssuranceLevel();
+      if (aal && aal.nextLevel === "aal2" && aal.nextLevel !== aal.currentLevel) {
+        const {
+          data: fs2
+        } = await supa.auth.mfa.listFactors();
+        const f = fs2 && fs2.totp && fs2.totp[0];
+        if (f) {
+          setDesafio({
+            factorId: f.id
+          });
+          setMsg("Digite o código do aplicativo.");
+        }
+      }
+    } catch (_) {}
   }
   // A9 — sem senha embutida no codigo, esquecer a senha deixaria o painel
   // inacessivel sem passar pelo painel do Supabase.
@@ -2770,6 +2812,116 @@ function PainelAdm({
     setMsgSenha("");
     setMsg("Senha alterada com sucesso.");
   }
+
+  // ================= verificação em duas etapas (TOTP) =================
+  // A conta do admin enxerga nome, matrícula e rubrica de todos os
+  // trabalhadores. Uma senha só, digitada em celular de obra, é pouco.
+  async function carregarFatores() {
+    try {
+      const {
+        data,
+        error
+      } = await supa.auth.mfa.listFactors();
+      if (error) {
+        setFatores([]);
+        return;
+      }
+      setFatores(data && data.totp || []);
+    } catch (_) {
+      setFatores([]);
+    }
+  }
+  async function iniciar2fa() {
+    setMsg2fa("");
+    const {
+      data,
+      error
+    } = await supa.auth.mfa.enroll({
+      factorType: "totp"
+    });
+    if (error) {
+      setMsg2fa("Não foi possível iniciar: " + error.message);
+      return;
+    }
+    setInscrevendo({
+      factorId: data.id,
+      uri: data.totp && data.totp.uri,
+      segredo: data.totp && data.totp.secret
+    });
+  }
+  async function confirmar2fa() {
+    if (!inscrevendo) return;
+    if (!/^[0-9]{6}$/.test(codigo2fa)) {
+      setMsg2fa("Digite os 6 dígitos do aplicativo.");
+      return;
+    }
+    setMsg2fa("Verificando…");
+    const d = await supa.auth.mfa.challenge({
+      factorId: inscrevendo.factorId
+    });
+    if (d.error) {
+      setMsg2fa("Erro: " + d.error.message);
+      return;
+    }
+    const v = await supa.auth.mfa.verify({
+      factorId: inscrevendo.factorId,
+      challengeId: d.data.id,
+      code: codigo2fa
+    });
+    if (v.error) {
+      setMsg2fa("Código incorreto. Tente o próximo que aparecer.");
+      return;
+    }
+    setInscrevendo(null);
+    setCodigo2fa("");
+    setMsg2fa("");
+    setMsg("Verificação em duas etapas ativada.");
+    carregarFatores();
+  }
+  async function remover2fa(id) {
+    if (!window.confirm("Desativar a verificação em duas etapas?\n\nA conta volta a depender só da senha.")) return;
+    const {
+      error
+    } = await supa.auth.mfa.unenroll({
+      factorId: id
+    });
+    if (error) {
+      setMsg2fa("Não foi possível remover: " + error.message);
+      return;
+    }
+    setMsg("Verificação em duas etapas desativada.");
+    carregarFatores();
+  }
+
+  // no login: se a conta tem 2FA, a senha sozinha nao basta
+  async function verificarCodigoLogin() {
+    if (!/^[0-9]{6}$/.test(codigo2fa)) {
+      setMsg("Digite os 6 dígitos do aplicativo.");
+      return;
+    }
+    setEntrando(true);
+    const d = await supa.auth.mfa.challenge({
+      factorId: desafio.factorId
+    });
+    if (d.error) {
+      setEntrando(false);
+      setMsg("Erro: " + d.error.message);
+      return;
+    }
+    const v = await supa.auth.mfa.verify({
+      factorId: desafio.factorId,
+      challengeId: d.data.id,
+      code: codigo2fa
+    });
+    setEntrando(false);
+    if (v.error) {
+      setMsg("Código incorreto.");
+      return;
+    }
+    setDesafio(null);
+    setCodigo2fa("");
+    setMsg("");
+  }
   async function sair() {
     await supa.auth.signOut();
     setLista([]);
@@ -2782,6 +2934,78 @@ function PainelAdm({
   const [prog, setProg] = useState(null); // {feitos,total,restante} do "Baixar todos"
   const [msg, setMsg] = useState("");
   const [verLixeira, setVerLixeira] = useState(false);
+  const [orfaos, setOrfaos] = useState(null); // null = ainda nao procurou
+  const [limpando, setLimpando] = useState(false);
+
+  // ---- PDFs órfãos ----
+  // Quando o registro falha depois do upload, o PDF fica no bucket sem
+  // documento apontando para ele. O anônimo perdeu o direito de apagar
+  // (de propósito), então a limpeza é do administrador.
+  async function listarObjetosDoBucket() {
+    const todos = [];
+    // os PDFs de DTS ficam na raiz; os de PT, na pasta pt/
+    for (const pasta of ["", "pt"]) {
+      let pagina = 0;
+      while (true) {
+        const {
+          data,
+          error
+        } = await supa.storage.from("dts-pdfs").list(pasta, {
+          limit: 100,
+          offset: pagina * 100
+        });
+        if (error) throw error;
+        const lote = data || [];
+        // entradas sem id são subpastas, não arquivos
+        lote.filter(o => o.id).forEach(o => todos.push(pasta ? pasta + "/" + o.name : o.name));
+        if (lote.length < 100) break;
+        pagina++;
+      }
+    }
+    return todos;
+  }
+  async function procurarOrfaos() {
+    setCarregando(true);
+    setMsg("");
+    setOrfaos(null);
+    try {
+      const objetos = await listarObjetosDoBucket();
+      // todos os caminhos citados por algum documento, incluindo os da lixeira
+      const emUso = new Set();
+      for (const tabela of ["dts", "pt"]) {
+        const dados = await buscarTudo(() => supa.from(tabela).select("pdf_path"));
+        (dados || []).forEach(r => r.pdf_path && emUso.add(r.pdf_path));
+      }
+      const soltos = objetos.filter(o => !emUso.has(o));
+      setOrfaos(soltos);
+      setMsg(soltos.length ? soltos.length + " arquivo(s) sem documento correspondente." : "Nenhum PDF órfão. O bucket está limpo.");
+    } catch (e) {
+      setMsg("Erro ao procurar órfãos: " + e.message);
+    } finally {
+      setCarregando(false);
+    }
+  }
+  async function apagarOrfaos() {
+    if (!orfaos || !orfaos.length) return;
+    if (!window.confirm("Apagar definitivamente " + orfaos.length + " arquivo(s) do Storage?\n\n" + "Eles não têm nenhum documento apontando para si. Esta ação não tem volta.")) return;
+    setLimpando(true);
+    setMsg("");
+    try {
+      // em lotes: a API do Storage tem limite por chamada
+      for (let i = 0; i < orfaos.length; i += 100) {
+        const {
+          error
+        } = await supa.storage.from("dts-pdfs").remove(orfaos.slice(i, i + 100));
+        if (error) throw error;
+      }
+      setMsg(orfaos.length + " arquivo(s) apagados.");
+      setOrfaos([]);
+    } catch (e) {
+      setMsg("Erro ao apagar: " + e.message);
+    } finally {
+      setLimpando(false);
+    }
+  }
   async function buscar(lixeira) {
     const naLixeira = lixeira === undefined ? verLixeira : lixeira;
     setCarregando(true);
@@ -3120,7 +3344,36 @@ function PainelAdm({
       },
       onClick: entrar,
       disabled: entrando
-    }, entrando ? "Entrando…" : "Entrar"), msg && /*#__PURE__*/React.createElement("p", {
+    }, entrando ? "Entrando…" : "Entrar"), desafio && /*#__PURE__*/React.createElement("div", {
+      style: {
+        marginTop: 12,
+        paddingTop: 12,
+        borderTop: "1px solid #eee"
+      }
+    }, /*#__PURE__*/React.createElement("label", null, "C\xF3digo de verifica\xE7\xE3o"), /*#__PURE__*/React.createElement("input", {
+      value: codigo2fa,
+      onChange: e => setCodigo2fa(e.target.value.replace(/[^0-9]/g, "").slice(0, 6)),
+      inputMode: "numeric",
+      placeholder: "000000",
+      autoComplete: "one-time-code",
+      style: {
+        width: "100%",
+        padding: 10,
+        fontSize: 20,
+        letterSpacing: 6,
+        textAlign: "center",
+        border: "1px solid #ccc",
+        borderRadius: 8,
+        marginBottom: 10
+      }
+    }), /*#__PURE__*/React.createElement("button", {
+      className: "btn btn-blue",
+      style: {
+        width: "100%"
+      },
+      onClick: verificarCodigoLogin,
+      disabled: entrando
+    }, entrando ? "Verificando…" : "Confirmar código")), msg && /*#__PURE__*/React.createElement("p", {
       style: {
         color: "#A32D2D",
         fontSize: 13
@@ -3189,7 +3442,110 @@ function PainelAdm({
       cursor: "pointer",
       textDecoration: "underline"
     }
-  }, "sair"))), trocando && /*#__PURE__*/React.createElement("div", {
+  }, "sair"))), trocando && fatores && /*#__PURE__*/React.createElement("div", {
+    style: {
+      border: "1px solid #dbe6f2",
+      background: "#f7fafd",
+      borderRadius: 10,
+      padding: "14px 16px",
+      margin: "0 0 14px"
+    }
+  }, /*#__PURE__*/React.createElement("h3", {
+    style: {
+      margin: "0 0 4px",
+      fontSize: 14,
+      color: "#185FA5"
+    }
+  }, "Verifica\xE7\xE3o em duas etapas"), fatores.length > 0 ? /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("p", {
+    style: {
+      margin: "0 0 10px",
+      fontSize: 12,
+      color: "#2E7D32"
+    }
+  }, /*#__PURE__*/React.createElement("b", null, "Ativa."), " Al\xE9m da senha, o login pede um c\xF3digo do seu aplicativo autenticador."), /*#__PURE__*/React.createElement("button", {
+    className: "btn btn-light",
+    style: {
+      fontSize: 13,
+      padding: "8px 14px"
+    },
+    onClick: () => remover2fa(fatores[0].id)
+  }, "Desativar")) : inscrevendo ? /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("p", {
+    style: {
+      margin: "0 0 10px",
+      fontSize: 12,
+      color: "#777"
+    }
+  }, "Leia o c\xF3digo abaixo com o Google Authenticator, Authy ou similar, e digite os 6 d\xEDgitos que aparecerem."), /*#__PURE__*/React.createElement("div", {
+    ref: caixaQR,
+    style: {
+      margin: "0 0 10px"
+    }
+  }), inscrevendo.segredo && /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 11,
+      color: "#999",
+      wordBreak: "break-all",
+      margin: "0 0 10px"
+    }
+  }, "Sem c\xE2mera? Digite este c\xF3digo no aplicativo: ", /*#__PURE__*/React.createElement("b", null, inscrevendo.segredo)), /*#__PURE__*/React.createElement("input", {
+    value: codigo2fa,
+    onChange: e => setCodigo2fa(e.target.value.replace(/[^0-9]/g, "").slice(0, 6)),
+    inputMode: "numeric",
+    placeholder: "000000",
+    style: {
+      width: 140,
+      padding: 10,
+      fontSize: 20,
+      letterSpacing: 6,
+      textAlign: "center",
+      border: "1px solid #ccc",
+      borderRadius: 8,
+      marginBottom: 10,
+      display: "block"
+    }
+  }), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 8
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "btn btn-blue",
+    style: {
+      fontSize: 13,
+      padding: "8px 14px"
+    },
+    onClick: confirmar2fa
+  }, "Confirmar"), /*#__PURE__*/React.createElement("button", {
+    className: "btn btn-light",
+    style: {
+      fontSize: 13,
+      padding: "8px 14px"
+    },
+    onClick: () => {
+      setInscrevendo(null);
+      setCodigo2fa("");
+      setMsg2fa("");
+    }
+  }, "Cancelar"))) : /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("p", {
+    style: {
+      margin: "0 0 10px",
+      fontSize: 12,
+      color: "#777"
+    }
+  }, "Hoje esta conta depende s\xF3 da senha. Com a verifica\xE7\xE3o ativa, quem tiver a senha ainda precisa do seu celular para entrar."), /*#__PURE__*/React.createElement("button", {
+    className: "btn btn-blue",
+    style: {
+      fontSize: 13,
+      padding: "8px 14px"
+    },
+    onClick: iniciar2fa
+  }, "Ativar")), msg2fa && /*#__PURE__*/React.createElement("p", {
+    style: {
+      color: "#A32D2D",
+      fontSize: 13,
+      margin: "10px 0 0"
+    }
+  }, msg2fa)), trocando && /*#__PURE__*/React.createElement("div", {
     style: {
       border: "1px solid #dbe6f2",
       background: "#f7fafd",
@@ -3301,6 +3657,20 @@ function PainelAdm({
       cursor: "pointer"
     }
   }, "Enviar per\xEDodo \xE0 lixeira"), /*#__PURE__*/React.createElement("button", {
+    onClick: procurarOrfaos,
+    disabled: carregando,
+    title: "Procura PDFs no Storage que nenhum documento referencia",
+    style: {
+      padding: "11px 16px",
+      borderRadius: 8,
+      border: "1px solid #bbb",
+      background: "#fff",
+      color: "#555",
+      fontSize: 14,
+      fontWeight: 600,
+      cursor: "pointer"
+    }
+  }, "Procurar PDFs \xF3rf\xE3os"), /*#__PURE__*/React.createElement("button", {
     onClick: () => {
       const v = !verLixeira;
       setVerLixeira(v);
@@ -3334,7 +3704,44 @@ function PainelAdm({
       color: "#999",
       margin: "8px 0 0"
     }
-  }, "Os registros do per\xEDodo em \"De/At\xE9\" saem das listagens e v\xE3o para a lixeira.", /*#__PURE__*/React.createElement("b", null, " N\xE3o \xE9 exclus\xE3o definitiva:"), " os PDFs s\xE3o mantidos e os registros podem ser restaurados em \"Ver lixeira\". A a\xE7\xE3o pede confirma\xE7\xE3o."), prog && /*#__PURE__*/React.createElement("div", {
+  }, "Os registros do per\xEDodo em \"De/At\xE9\" saem das listagens e v\xE3o para a lixeira.", /*#__PURE__*/React.createElement("b", null, " N\xE3o \xE9 exclus\xE3o definitiva:"), " os PDFs s\xE3o mantidos e os registros podem ser restaurados em \"Ver lixeira\". A a\xE7\xE3o pede confirma\xE7\xE3o."), orfaos && orfaos.length > 0 && /*#__PURE__*/React.createElement("div", {
+    style: {
+      border: "1px solid #E7C77A",
+      background: "#FFF6E5",
+      borderRadius: 10,
+      padding: "12px 14px",
+      margin: "12px 0"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 13.5,
+      color: "#7A5510",
+      marginBottom: 8
+    }
+  }, /*#__PURE__*/React.createElement("b", null, orfaos.length, " PDF(s) sem documento correspondente."), /*#__PURE__*/React.createElement("br", null), "Sobram quando o envio falha depois do upload. Apagar n\xE3o afeta nenhuma DTS ou PT."), /*#__PURE__*/React.createElement("div", {
+    style: {
+      maxHeight: 150,
+      overflowY: "auto",
+      fontSize: 12,
+      color: "#666",
+      fontFamily: "monospace",
+      marginBottom: 10
+    }
+  }, orfaos.map(o => /*#__PURE__*/React.createElement("div", {
+    key: o
+  }, o))), /*#__PURE__*/React.createElement("button", {
+    className: "btn",
+    disabled: limpando,
+    style: {
+      fontSize: 13,
+      padding: "8px 14px",
+      border: "1px solid #A32D2D",
+      background: "#fff",
+      color: "#A32D2D",
+      cursor: "pointer"
+    },
+    onClick: apagarOrfaos
+  }, limpando ? "Apagando…" : "Apagar os " + orfaos.length + " arquivos")), prog && /*#__PURE__*/React.createElement("div", {
     style: {
       margin: "10px 0",
       padding: "10px 12px",
