@@ -19,16 +19,19 @@ jobs:
       - name: Consultar Supabase (mantém o projeto ativo)
         run: |
           SUPABASE_URL="https://atbkjmvogkuekrcoevkn.supabase.co"
-          TABELA="dts"
+          # A tabela nao pode mais ser lida pelo anon (banco fechado em 20/08/2026).
+          # Por isso o ping chama a FUNCAO, que e o unico direito que sobrou ao anonimo.
           # Chave ANON (publishable) — pública por natureza, já vai no index.html do app.
           # NUNCA colocar a service_role aqui.
           ANON_KEY="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImF0YmtqbXZvZ2t1ZWtyY29ldmtuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODcyNDM3MTYsImV4cCI6MjEwMjgxOTcxNn0.WkQUYjvcivCGo3oxDLlVFFXXelxZGb80SMauWuF0VRE"
 
-          echo "Consultando: $SUPABASE_URL/rest/v1/$TABELA?select=id&limit=1"
+          echo "Chamando: $SUPABASE_URL/rest/v1/rpc/proxima_revisao"
 
           # -s: silencioso | -o: guarda o corpo da resposta | -w: imprime o código HTTP
           STATUS=$(curl -s -o resposta.txt -w "%{http_code}" \
-            "$SUPABASE_URL/rest/v1/$TABELA?select=id&limit=1" \
+            -X POST "$SUPABASE_URL/rest/v1/rpc/proxima_revisao" \
+            -H "Content-Type: application/json" \
+            --data '{"p_doc":"dts","p_os_base":null,"p_data":null,"p_tipo":null}' \
             -H "apikey: $ANON_KEY" \
             -H "Authorization: Bearer $ANON_KEY")
 
