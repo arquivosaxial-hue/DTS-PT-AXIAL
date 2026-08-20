@@ -1,0 +1,42 @@
+[
+  {
+    "arquivo": "modelo_dts.pdf",
+    "hash": "6ef64c4d267aa8de",
+    "bytes": 712420
+  },
+  {
+    "arquivo": "modelo_pt_altura.pdf",
+    "hash": "172d108c33741b93",
+    "bytes": 130793
+  },
+  {
+    "arquivo": "modelo_pt_confinado.pdf",
+    "hash": "5220359a80b0a67d",
+    "bytes": 138013
+  },
+  {
+    "arquivo": "modelo_pt_eletricidade.pdf",
+    "hash": "fcd4786fced80cf1",
+    "bytes": 101250
+  },
+  {
+    "arquivo": "modelo_pt_escavacao.pdf",
+    "hash": "5e65d3d1159bd324",
+    "bytes": 137849
+  },
+  {
+    "arquivo": "modelo_pt_icamento.pdf",
+    "hash": "5dc882f805ab3387",
+    "bytes": 117847
+  },
+  {
+    "arquivo": "modelo_pt_mergulho.pdf",
+    "hash": "839468bd18aff3a6",
+    "bytes": 104618
+  },
+  {
+    "arquivo": "modelo_pt_quente.pdf",
+    "hash": "2491c783185142db",
+    "bytes": 96310
+  }
+]

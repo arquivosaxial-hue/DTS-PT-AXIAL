@@ -1,0 +1,19 @@
+{
+  "name": "dts-solution-ferramentas",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Verificacao e servidor local. NAO faz parte do app publicado.",
+  "scripts": {
+    "verificar": "node verificar.js",
+    "servidor": "node servidor.js",
+    "sri": "node sri.js",
+    "modelos": "node modelos.js",
+    "modelos:gravar": "node modelos.js --gravar"
+  },
+  "dependencies": {
+    "@babel/core": "^7.25.0",
+    "@babel/parser": "^7.25.0",
+    "@babel/preset-react": "^7.24.0",
+    "@babel/traverse": "^7.25.0"
+  }
+}
