@@ -152,7 +152,7 @@
 
   <script type="text/babel">
     const { useState, useRef, useEffect } = React;
-    const APP_VERSION = "V1";
+    const APP_VERSION = "V2";
 
     // ===== CONFIG SUPABASE =====
     const SUPABASE_URL = "https://atbkjmvogkuekrcoevkn.supabase.co";
@@ -381,91 +381,53 @@
     const eConflitoDe = (erro, trecho) =>
       erro && erro.code===ERRO_DUPLICADO && String(erro.message||"").includes(trecho);
 
-    // Sobe o PDF primeiro e só então insere o registro. Se o insert falhar, o PDF é
-    // removido do Storage. Se os COLABORADORES falharem, o documento também é desfeito:
-    // uma DTS/PT sem a equipe que participou não é um documento válido, e deixá-la no
-    // banco faria a retentativa da fila criar uma segunda cópia completa.
-    //
-    // A revisão é resolvida CONTRA O BANCO: propomos um número e, se outro aparelho tiver
-    // chegado primeiro, o índice único recusa e tentamos o próximo. Antes isso era uma
-    // contagem feita no cliente, e dois aparelhos reconectando juntos geravam o mesmo
-    // "Rev.01" para documentos diferentes.
-    async function enviarDocumento({ tabela, tabelaColab, chaveColab, caminhoPdf,
-                                     registro, colaboradores, bytes, osBase, revisaoInicial }){
+    // Sobe o PDF e manda o registro pela FUNCAO do banco (registrar_dts / registrar_pt).
+    // A chave anon nao tem mais privilegio nenhum nas tabelas: este e o unico caminho
+    // de escrita que existe. A funcao valida os campos, calcula a revisao sob trava e
+    // grava documento + equipe na MESMA transacao — nada de DTS orfa sem equipe.
+    async function enviarDocumento({ rpc, caminhoPdf, registro, colaboradores, bytes }){
       const { error:eUp } = await supa.storage.from("dts-pdfs")
         .upload(caminhoPdf, new Blob([bytes],{type:"application/pdf"}), { upsert:true, contentType:"application/pdf" });
-      if(eUp) throw eUp; // sem PDF garantido, não insere o registro
+      if(eUp) throw eUp; // sem PDF garantido, nao registra
 
-      let revisao = Number.isInteger(revisaoInicial) ? revisaoInicial : 0;
-      let ins=null, ultimoErro=null;
+      const { data, error } = await supa.rpc(rpc, {
+        p_registro: registro,
+        p_colaboradores: colaboradores || [],
+        p_pdf_path: caminhoPdf,
+      });
+      // O anon perdeu o direito de apagar no Storage, entao um PDF orfao pode sobrar
+      // quando o registro falha. E desperdicio, nao perda: o documento nao entrou.
+      if(error) throw error;
 
-      for(let tentativa=0; tentativa<25; tentativa++){
-        const linha = { ...registro, pdf_path:caminhoPdf };
-        if(osBase){ linha.revisao = revisao; linha.numero_os = osComRevisao(osBase, revisao); }
-
-        const r = await supa.from(tabela).insert(linha).select().single();
-        if(!r.error){ ins = r.data; break; }
-
-        // Já subiu antes: a primeira tentativa chegou e só a resposta se perdeu.
-        // Isso não é erro — é a duplicata sendo impedida, que é o objetivo.
-        if(eConflitoDe(r.error, "cliente_id")){
-          return { id:null, pdf_path:caminhoPdf, jaExistia:true };
-        }
-        // Outro aparelho pegou este número de revisão primeiro: tenta o próximo.
-        if(osBase && eConflitoDe(r.error, "os_dia_rev")){ revisao++; ultimoErro=r.error; continue; }
-
-        try{ await supa.storage.from("dts-pdfs").remove([caminhoPdf]); }catch(_){}
-        throw r.error;
-      }
-
-      if(!ins){
-        try{ await supa.storage.from("dts-pdfs").remove([caminhoPdf]); }catch(_){}
-        throw ultimoErro || new Error("não foi possível definir o número de revisão");
-      }
-
-      if(colaboradores && colaboradores.length){
-        const rows = colaboradores.map((nome,i)=>({ [chaveColab]:ins.id, nome, ordem:i }));
-        const { error:eColab } = await supa.from(tabelaColab).insert(rows);
-        if(eColab){
-          try{ await supa.from(tabela).delete().eq("id", ins.id); }catch(_){}
-          try{ await supa.storage.from("dts-pdfs").remove([caminhoPdf]); }catch(_){}
-          throw eColab;
-        }
-      }
-      return { id: ins.id, pdf_path: caminhoPdf, numero_os: ins.numero_os, revisao };
+      return { id:data && data.id, pdf_path:caminhoPdf,
+               numero_os:data && data.numero_os, revisao:data && data.revisao,
+               jaExistia: !!(data && data.ja_existia) };
     }
 
-    function enviarDTSDoc(registro, colaboradores, bytes, osNome, osBase, revisaoInicial){
-      return enviarDocumento({
-        tabela:"dts", tabelaColab:"dts_colaborador", chaveColab:"dts_id",
+    function enviarDTSDoc(registro, colaboradores, bytes, osNome){
+      return enviarDocumento({ rpc:"registrar_dts",
         caminhoPdf:"DTS_"+(osNome||"sem_os")+"_"+Date.now()+".pdf",
-        registro, colaboradores, bytes, osBase, revisaoInicial,
-      });
+        registro, colaboradores, bytes });
     }
-    // Serve as 7 PTs: o que muda entre elas é só o prefixo do arquivo.
-    function enviarPTDoc(tipo, registro, colaboradores, bytes, osNome, osBase, revisaoInicial){
-      return enviarDocumento({
-        tabela:"pt", tabelaColab:"pt_colaborador", chaveColab:"pt_id",
+    // Serve as 7 PTs: o que muda entre elas e so o prefixo do arquivo.
+    function enviarPTDoc(tipo, registro, colaboradores, bytes, osNome){
+      return enviarDocumento({ rpc:"registrar_pt",
         caminhoPdf:"pt/PT_"+tipo+"_"+(osNome||"sem_os")+"_"+Date.now()+".pdf",
-        registro, colaboradores, bytes, osBase, revisaoInicial,
-      });
+        registro:{...registro, tipo}, colaboradores, bytes });
     }
 
-    // Sugere por qual revisão COMEÇAR a tentar (mesma OS, no mesmo dia).
-    // É só um palpite para acertar de primeira no caso comum: quem decide de verdade é o
-    // índice único do banco, dentro de enviarDocumento(). Se esta consulta falhar ou vier
-    // desatualizada, o pior que acontece é uma tentativa a mais.
+    // Palpite do numero de revisao, so para imprimir no PDF (que e gerado antes do
+    // envio). Vem por funcao porque o anon nao le mais as tabelas. Quem decide de
+    // verdade e registrar_dts/registrar_pt, sob trava.
     async function sugerirRevisao(osBase, dataAtividade, doc, tipo){
       if(!osBase || !dataAtividade) return 0;
       try{
-        let q = supa.from(doc==="pt" ? "pt" : "dts").select("revisao")
-          .eq("numero_os_base", osBase).eq("data_atividade", dataAtividade);
-        if(doc==="pt" && tipo) q = q.eq("tipo", tipo);
-        const { data } = await q;
-        if(!data || !data.length) return 0;
-        // documentos gravados antes da V38 têm revisao nula: contam como ocupando a base
-        const maior = data.reduce((m,r)=> Math.max(m, Number.isInteger(r.revisao) ? r.revisao : 0), -1);
-        return maior + 1;
+        const { data, error } = await supa.rpc("proxima_revisao", {
+          p_doc: doc==="pt" ? "pt" : "dts",
+          p_os_base: osBase, p_data: dataAtividade, p_tipo: tipo || null,
+        });
+        if(error) return 0;
+        return Number.isInteger(data) ? data : 0;
       }catch(_){ return 0; }
     }
 
@@ -516,6 +478,45 @@
     }
 
     function fmtHora(d){ return String(d.getHours()).padStart(2,"0")+":"+String(d.getMinutes()).padStart(2,"0"); }
+
+    // Campo de senha com botao de ver/ocultar. Digitar senha as cegas em teclado de
+    // celular e fonte constante de erro — e aqui isso acontece em campo, com pressa,
+    // as vezes de luva.
+    function CampoSenha({ value, onChange, onKeyDown, placeholder, autoFocus }){
+      const [ver,setVer]=useState(false);
+      return (
+        <div style={{position:"relative"}}>
+          <input type={ver?"text":"password"} value={value} onChange={onChange} onKeyDown={onKeyDown}
+            placeholder={placeholder||"Senha"} autoFocus={autoFocus}
+            style={{width:"100%",padding:"10px 74px 10px 10px",fontSize:15,border:"1px solid #ccc",
+                    borderRadius:8,marginBottom:10}} />
+          <button type="button" onClick={()=>setVer(v=>!v)}
+            aria-label={ver?"Ocultar senha":"Mostrar senha"}
+            style={{position:"absolute",right:4,top:3,background:"none",border:"none",cursor:"pointer",
+                    fontSize:12,fontWeight:600,color:"#185FA5",padding:"9px 10px",lineHeight:1}}>
+            {ver?"ocultar":"ver"}
+          </button>
+        </div>
+      );
+    }
+
+    // Tocar na versao busca a mais recente. Serve para o caso do aparelho em campo
+    // ter ficado com codigo antigo em cache: resolve sem precisar limpar dados do
+    // navegador. Fica so na tela inicial, nunca dentro de um formulario, entao nao
+    // ha risco de perder preenchimento.
+    async function atualizarApp(){
+      try{
+        if(navigator.serviceWorker){
+          const reg = await navigator.serviceWorker.getRegistration();
+          if(reg){
+            try{ await reg.update(); }catch(_){}
+            if(reg.waiting) reg.waiting.postMessage("SKIP_WAITING");
+          }
+        }
+      }catch(_){}
+      location.reload();
+    }
+
 
     function PillGroup({ options, selected, onToggle }) {
       return (<div className="pills">{options.map(o=>(
@@ -1271,9 +1272,7 @@
     // ============================================================
     // PAINEL ADM (cortina de senha) - lista DTS por período e baixa PDFs
     // ============================================================
-    // SENHA: troque o valor abaixo pela senha que você quiser.
     // Aviso: isto é uma "cortina" visual, não proteção forte.
-    const ADM_SENHA = "GS@2026";
 
     // Devolve "YYYY-MM-DD" no FUSO LOCAL (não usa toISOString, que converte
     // para UTC e joga o registro para o dia seguinte à noite no Brasil).
@@ -1329,8 +1328,30 @@
     }
 
     function PainelAdm({ onVoltar, cfg=CFG_DTS }) {
-      const [ok,setOk]=useState(false);
+      // Autenticacao de verdade: quem manda e a sessao do Supabase, nao uma senha
+      // comparada no navegador. Sem sessao valida, o banco recusa a leitura — mesmo
+      // que alguem burle a tela.
+      const [sessao,setSessao]=useState(undefined);   // undefined = ainda verificando
+      const [email,setEmail]=useState("");
       const [senha,setSenha]=useState("");
+      const [entrando,setEntrando]=useState(false);
+
+      useEffect(()=>{
+        let vivo=true;
+        supa.auth.getSession().then(({data})=>{ if(vivo) setSessao(data.session||null); });
+        const { data:sub } = supa.auth.onAuthStateChange((_e,s)=>{ if(vivo) setSessao(s); });
+        return ()=>{ vivo=false; if(sub&&sub.subscription) sub.subscription.unsubscribe(); };
+      },[]);
+
+      async function entrar(){
+        if(!email.trim()||!senha){ setMsg("Informe e-mail e senha."); return; }
+        setEntrando(true); setMsg("");
+        const { error } = await supa.auth.signInWithPassword({ email:email.trim(), password:senha });
+        setEntrando(false);
+        if(error){ setMsg("E-mail ou senha incorretos."); return; }
+        setSenha("");
+      }
+      async function sair(){ await supa.auth.signOut(); setLista([]); }
       const [de,setDe]=useState("");
       const [ate,setAte]=useState("");
       const [tipoFiltro,setTipoFiltro]=useState("");
@@ -1449,9 +1470,8 @@
           ? ((cfg.tipos||[]).find(t=>t[0]===tipoFiltro)||["",tipoFiltro])[1]
           : null;
         const alvoTxt = rotuloTipo ? (cfg.rotulo+" do tipo \""+rotuloTipo+"\"") : ("TODOS os registros de "+cfg.rotulo);
-        const conf = window.prompt("Enviar para a LIXEIRA:\n\n"+alvoTxt+"\nde "+de+" até "+ate+".\n\nOs registros saem das listagens, mas podem ser restaurados depois. Os PDFs são mantidos.\n\nDigite a senha do administrador para confirmar:");
-        if(conf===null) return; // cancelou
-        if(conf!==ADM_SENHA){ alert("Senha incorreta. Nada foi alterado."); return; }
+        const conf = window.confirm("Enviar para a LIXEIRA:\n\n"+alvoTxt+"\nde "+de+" até "+ate+".\n\nOs registros saem das listagens, mas podem ser restaurados depois. Os PDFs são mantidos.\n\nDigite a senha do administrador para confirmar:");
+          if(!conf) return;
         setCarregando(true); setMsg("");
         try{
           // 1) busca os alvos do período — PAGINADO e com os MESMOS filtros da tela
@@ -1481,9 +1501,9 @@
 
       async function excluirUma(item){
         const desc=((item[cfg.colTitulo])||cfg.rotulo)+" — OS "+(item.numero_os||"-");
-        const conf=window.prompt("Enviar este registro para a LIXEIRA?\n\n"+desc+"\n\nEle sai das listagens, mas pode ser restaurado depois. O PDF é mantido.\n\nDigite a senha do administrador para confirmar:");
+        const conf=window.confirm("Enviar este registro para a LIXEIRA?\n\n"+desc+"\n\nEle sai das listagens, mas pode ser restaurado depois. O PDF é mantido.\n\nDigite a senha do administrador para confirmar:");
         if(conf===null) return;
-        if(conf!==ADM_SENHA){ alert("Senha incorreta. Nada foi alterado."); return; }
+          if(!conf) return;
         setCarregando(true); setMsg("");
         try{
           // LIXEIRA: marca como excluído; o PDF do Storage é MANTIDO para
@@ -1515,15 +1535,20 @@
         finally{ setCarregando(false); }
       }
 
-      if(!ok){
+      if(sessao===undefined){
+        return (<div style={{maxWidth:360,margin:"60px auto",padding:24,textAlign:"center",color:"#888"}}>Verificando acesso…</div>);
+      }
+      if(!sessao){
         return (<div style={{maxWidth:360,margin:"60px auto",padding:24,background:"#fff",borderRadius:12}}>
           <h2 style={{color:"#185FA5",marginTop:0}}>Painel administrativo</h2>
-          <p style={{fontSize:13,color:"#666"}}>Digite a senha para acessar os relatórios.</p>
-          <input type="password" value={senha} onChange={e=>setSenha(e.target.value)} placeholder="Senha"
-            onKeyDown={e=>e.key==="Enter"&&(senha===ADM_SENHA?setOk(true):setMsg("Senha incorreta"))}
-            style={{width:"100%",padding:10,fontSize:15,border:"1px solid #ccc",borderRadius:8,marginBottom:10}} />
-          <button className="btn btn-blue" style={{width:"100%"}}
-            onClick={()=> senha===ADM_SENHA ? setOk(true) : setMsg("Senha incorreta")}>Entrar</button>
+          <p style={{fontSize:13,color:"#666"}}>Entre com sua conta para acessar os relatórios.</p>
+          <input type="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="E-mail"
+            autoComplete="username" style={{width:"100%",padding:10,fontSize:15,border:"1px solid #ccc",borderRadius:8,marginBottom:10}} />
+          <CampoSenha value={senha} onChange={e=>setSenha(e.target.value)} placeholder="Senha"
+            onKeyDown={e=>e.key==="Enter"&&entrar()} />
+          <button className="btn btn-blue" style={{width:"100%"}} onClick={entrar} disabled={entrando}>
+            {entrando?"Entrando…":"Entrar"}
+          </button>
           {msg && <p style={{color:"#A32D2D",fontSize:13}}>{msg}</p>}
           <p style={{fontSize:12,color:"#999",marginTop:16}}><a onClick={onVoltar} style={{color:"#185FA5",cursor:"pointer"}}>← Voltar ao início</a></p>
         </div>);
@@ -1533,6 +1558,10 @@
         <div className="header" style={{borderRadius:10}}>
           <h1>Painel administrativo — {cfg.rotulo}</h1>
           <p>Construtora Axial · relatórios por período</p>
+          <p style={{margin:"6px 0 0",fontSize:12,color:"#B5D4F4"}}>
+            {sessao.user.email}
+            <a onClick={sair} style={{marginLeft:10,color:"#fff",cursor:"pointer",textDecoration:"underline"}}>sair</a>
+          </p>
         </div>
         <div style={{padding:"16px 0"}}>
           <div style={{display:"flex",gap:10,flexWrap:"wrap",alignItems:"flex-end"}}>
@@ -3281,7 +3310,8 @@ altura: {
             </div>
           </div>
           {qrApp && <QRAppModal onClose={()=>setQrApp(false)} />}
-          <div style={{textAlign:"center",padding:"8px 0 12px",color:"#bbb",fontSize:11,letterSpacing:.5}}>{APP_VERSION}</div>
+          <div onClick={atualizarApp} title="Toque para buscar a versão mais recente"
+            style={{textAlign:"center",padding:"8px 0 12px",color:"#bbb",fontSize:11,letterSpacing:.5,cursor:"pointer"}}>{APP_VERSION}</div>
         </div>
       );
     }
