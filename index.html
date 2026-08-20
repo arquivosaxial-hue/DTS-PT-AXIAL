@@ -153,7 +153,7 @@
 
   <script type="text/babel">
     const { useState, useRef, useEffect } = React;
-    const APP_VERSION = "V3";
+    const APP_VERSION = "V4";
 
     // ===== CONFIG SUPABASE =====
     const SUPABASE_URL = "https://atbkjmvogkuekrcoevkn.supabase.co";
@@ -1336,6 +1336,10 @@
       const [email,setEmail]=useState("");
       const [senha,setSenha]=useState("");
       const [entrando,setEntrando]=useState(false);
+      const [trocando,setTrocando]=useState(false);
+      const [senhaNova,setSenhaNova]=useState("");
+      const [senhaConf,setSenhaConf]=useState("");
+      const [msgSenha,setMsgSenha]=useState("");
 
       useEffect(()=>{
         let vivo=true;
@@ -1379,6 +1383,23 @@
         });
         setMsg(error ? "Não foi possível enviar o e-mail de recuperação."
                      : "Enviamos um link de recuperação para " + email.trim() + ".");
+      }
+
+      // Trocar a propria senha sem passar pelo painel do Supabase nem pelo e-mail
+      // de recuperacao. Exige sessao valida — o Supabase so aceita a troca de quem
+      // ja esta autenticado, entao nao da para trocar a senha de outra pessoa.
+      async function alterarSenha(){
+        if(senhaNova.length < 8){ setMsgSenha("A senha precisa ter ao menos 8 caracteres."); return; }
+        if(senhaNova !== senhaConf){ setMsgSenha("As duas senhas nao conferem."); return; }
+        setMsgSenha("Salvando…");
+        const { error } = await supa.auth.updateUser({ password: senhaNova });
+        if(error){
+          // acontece se o projeto exigir reautenticacao recente para trocar senha
+          setMsgSenha("Nao foi possivel alterar: " + error.message);
+          return;
+        }
+        setSenhaNova(""); setSenhaConf(""); setTrocando(false); setMsgSenha("");
+        setMsg("Senha alterada com sucesso.");
       }
 
       async function sair(){ await supa.auth.signOut(); setLista([]); }
@@ -1593,9 +1614,30 @@
           <p>Construtora Axial · relatórios por período</p>
           <p style={{margin:"6px 0 0",fontSize:12,color:"#B5D4F4"}}>
             {sessao.user.email}
+            <a onClick={()=>{ setTrocando(v=>!v); setMsgSenha(""); }}
+              style={{marginLeft:10,color:"#fff",cursor:"pointer",textDecoration:"underline"}}>alterar senha</a>
             <a onClick={sair} style={{marginLeft:10,color:"#fff",cursor:"pointer",textDecoration:"underline"}}>sair</a>
           </p>
         </div>
+
+        {trocando && (
+          <div style={{border:"1px solid #dbe6f2",background:"#f7fafd",borderRadius:10,
+                       padding:"14px 16px",margin:"14px 0"}}>
+            <h3 style={{margin:"0 0 4px",fontSize:14,color:"#185FA5"}}>Alterar minha senha</h3>
+            <p style={{margin:"0 0 10px",fontSize:12,color:"#777"}}>
+              Mínimo de 8 caracteres. Vale para a conta {sessao.user.email}.
+            </p>
+            <CampoSenha value={senhaNova} onChange={e=>setSenhaNova(e.target.value)} placeholder="Nova senha" />
+            <CampoSenha value={senhaConf} onChange={e=>setSenhaConf(e.target.value)} placeholder="Repita a nova senha"
+              onKeyDown={e=>e.key==="Enter"&&alterarSenha()} />
+            <div style={{display:"flex",gap:8}}>
+              <button className="btn btn-blue" style={{fontSize:13,padding:"8px 14px"}} onClick={alterarSenha}>Salvar nova senha</button>
+              <button className="btn btn-light" style={{fontSize:13,padding:"8px 14px"}}
+                onClick={()=>{ setTrocando(false); setSenhaNova(""); setSenhaConf(""); setMsgSenha(""); }}>Cancelar</button>
+            </div>
+            {msgSenha && <p style={{color:"#A32D2D",fontSize:13,margin:"10px 0 0"}}>{msgSenha}</p>}
+          </div>
+        )}
         <div style={{padding:"16px 0"}}>
           <div style={{display:"flex",gap:10,flexWrap:"wrap",alignItems:"flex-end"}}>
             <div><label>De (data)</label><input type="date" value={de} onChange={e=>setDe(e.target.value)} /></div>
