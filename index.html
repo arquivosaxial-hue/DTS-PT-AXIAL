@@ -6,6 +6,7 @@
   <title>DTS - Construtora Axial</title>
   <link rel="manifest" href="manifest.json" />
   <meta name="theme-color" content="#185FA5" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://unpkg.com https://cdn.jsdelivr.net https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' https://*.supabase.co; frame-ancestors 'none'; base-uri 'self'; form-action 'none'" />
   <script>
     // Registra o service worker (modo offline). Falha silenciosa se não suportado.
     if ("serviceWorker" in navigator) {
@@ -152,7 +153,7 @@
 
   <script type="text/babel">
     const { useState, useRef, useEffect } = React;
-    const APP_VERSION = "V2";
+    const APP_VERSION = "V3";
 
     // ===== CONFIG SUPABASE =====
     const SUPABASE_URL = "https://atbkjmvogkuekrcoevkn.supabase.co";
@@ -387,7 +388,7 @@
     // grava documento + equipe na MESMA transacao — nada de DTS orfa sem equipe.
     async function enviarDocumento({ rpc, caminhoPdf, registro, colaboradores, bytes }){
       const { error:eUp } = await supa.storage.from("dts-pdfs")
-        .upload(caminhoPdf, new Blob([bytes],{type:"application/pdf"}), { upsert:true, contentType:"application/pdf" });
+        .upload(caminhoPdf, new Blob([bytes],{type:"application/pdf"}), { upsert:false, contentType:"application/pdf" });
       if(eUp) throw eUp; // sem PDF garantido, nao registra
 
       const { data, error } = await supa.rpc(rpc, {
@@ -1343,6 +1344,24 @@
         return ()=>{ vivo=false; if(sub&&sub.subscription) sub.subscription.unsubscribe(); };
       },[]);
 
+      // A5 — encerra a sessao apos um tempo sem uso. O painel enxerga dado
+      // pessoal de todos os trabalhadores; deixar logado num aparelho de obra
+      // seria o mesmo que deixar o armario aberto.
+      const MINUTOS_INATIVIDADE = 30;
+      useEffect(()=>{
+        if(!sessao) return;
+        let t;
+        const reiniciar=()=>{
+          clearTimeout(t);
+          t=setTimeout(()=>{ supa.auth.signOut(); setMsg("Sessão encerrada por inatividade."); },
+                       MINUTOS_INATIVIDADE*60*1000);
+        };
+        const eventos=["click","keydown","touchstart","scroll"];
+        eventos.forEach(e=>window.addEventListener(e,reiniciar,{passive:true}));
+        reiniciar();
+        return ()=>{ clearTimeout(t); eventos.forEach(e=>window.removeEventListener(e,reiniciar)); };
+      },[sessao]);
+
       async function entrar(){
         if(!email.trim()||!senha){ setMsg("Informe e-mail e senha."); return; }
         setEntrando(true); setMsg("");
@@ -1351,6 +1370,17 @@
         if(error){ setMsg("E-mail ou senha incorretos."); return; }
         setSenha("");
       }
+      // A9 — sem senha embutida no codigo, esquecer a senha deixaria o painel
+      // inacessivel sem passar pelo painel do Supabase.
+      async function recuperarSenha(){
+        if(!email.trim()){ setMsg("Digite seu e-mail primeiro."); return; }
+        const { error } = await supa.auth.resetPasswordForEmail(email.trim(), {
+          redirectTo: window.location.origin + window.location.pathname,
+        });
+        setMsg(error ? "Não foi possível enviar o e-mail de recuperação."
+                     : "Enviamos um link de recuperação para " + email.trim() + ".");
+      }
+
       async function sair(){ await supa.auth.signOut(); setLista([]); }
       const [de,setDe]=useState("");
       const [ate,setAte]=useState("");
@@ -1470,7 +1500,7 @@
           ? ((cfg.tipos||[]).find(t=>t[0]===tipoFiltro)||["",tipoFiltro])[1]
           : null;
         const alvoTxt = rotuloTipo ? (cfg.rotulo+" do tipo \""+rotuloTipo+"\"") : ("TODOS os registros de "+cfg.rotulo);
-        const conf = window.confirm("Enviar para a LIXEIRA:\n\n"+alvoTxt+"\nde "+de+" até "+ate+".\n\nOs registros saem das listagens, mas podem ser restaurados depois. Os PDFs são mantidos.\n\nDigite a senha do administrador para confirmar:");
+        const conf = window.confirm("Enviar para a LIXEIRA:\n\n"+alvoTxt+"\nde "+de+" até "+ate+".\n\nOs registros saem das listagens, mas podem ser restaurados depois. Os PDFs são mantidos.");
           if(!conf) return;
         setCarregando(true); setMsg("");
         try{
@@ -1501,7 +1531,7 @@
 
       async function excluirUma(item){
         const desc=((item[cfg.colTitulo])||cfg.rotulo)+" — OS "+(item.numero_os||"-");
-        const conf=window.confirm("Enviar este registro para a LIXEIRA?\n\n"+desc+"\n\nEle sai das listagens, mas pode ser restaurado depois. O PDF é mantido.\n\nDigite a senha do administrador para confirmar:");
+        const conf=window.confirm("Enviar este registro para a LIXEIRA?\n\n"+desc+"\n\nEle sai das listagens, mas pode ser restaurado depois. O PDF é mantido.");
         if(conf===null) return;
           if(!conf) return;
         setCarregando(true); setMsg("");
@@ -1525,7 +1555,7 @@
         try{
           const bytes=await file.arrayBuffer();
           const nome=(cfg.tabela==="dts"?"":"pt/")+cfg.prefixo+"_"+(item.numero_os||"sem_os")+"_"+item.id+".pdf";
-          const { error:eS }=await supa.storage.from("dts-pdfs").upload(nome, new Blob([bytes],{type:"application/pdf"}), { upsert:true, contentType:"application/pdf" });
+          const { error:eS }=await supa.storage.from("dts-pdfs").upload(nome, new Blob([bytes],{type:"application/pdf"}), { upsert:false, contentType:"application/pdf" });
           if(eS) throw eS;
           const { error:eU }=await supa.from(cfg.tabela).update({ pdf_path:nome }).eq("id", item.id);
           if(eU) throw eU;
@@ -1550,6 +1580,9 @@
             {entrando?"Entrando…":"Entrar"}
           </button>
           {msg && <p style={{color:"#A32D2D",fontSize:13}}>{msg}</p>}
+          <p style={{fontSize:12,marginTop:12,textAlign:"center"}}>
+            <a onClick={recuperarSenha} style={{color:"#185FA5",cursor:"pointer"}}>Esqueci minha senha</a>
+          </p>
           <p style={{fontSize:12,color:"#999",marginTop:16}}><a onClick={onVoltar} style={{color:"#185FA5",cursor:"pointer"}}>← Voltar ao início</a></p>
         </div>);
       }
@@ -1597,7 +1630,7 @@
             : <p style={{fontSize:12,color:"#999",margin:"8px 0 0"}}>
                 Os registros do período em "De/Até" saem das listagens e vão para a lixeira.
                 <b> Não é exclusão definitiva:</b> os PDFs são mantidos e os registros podem ser
-                restaurados em "Ver lixeira". Pede a senha do administrador para confirmar.
+                restaurados em "Ver lixeira". A ação pede confirmação.
               </p>
           }
           {prog && (
