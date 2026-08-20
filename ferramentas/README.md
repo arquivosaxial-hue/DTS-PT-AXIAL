@@ -16,7 +16,20 @@ Isso cria `node_modules/`, que **não deve ser enviado ao GitHub** (já está no
 
 ---
 
-## Antes de publicar: `npm run verificar`
+## Antes de publicar: `npm run construir` e depois `npm run verificar`
+
+O app publicado **não** é o código-fonte. Você edita `src/index.html` (com JSX) e o
+build gera o `index.html` da raiz, que é o arquivo a subir no GitHub.
+
+```bash
+npm run construir
+```
+
+Sem isso, o que vai para o ar é a versão anterior — e nada avisaria, se o verificar
+não conferisse. **Nunca edite o `index.html` da raiz:** ele leva um aviso no topo e
+qualquer alteração some no próximo build.
+
+## Depois: `npm run verificar`
 
 ```bash
 npm run verificar
@@ -36,7 +49,9 @@ Roda em segundos e faz quatro checagens:
 4. **As bibliotecas têm SRI?** Sem `integrity=`, um CDN comprometido executa o
    que quiser dentro do app.
 
-5. **Os modelos de PDF continuam os mesmos?** As coordenadas de escrita foram
+5. **O build está em dia?** Se você editou o fonte e esqueceu de construir, ou se
+   subiu o fonte no lugar do gerado, aqui aparece.
+6. **Os modelos de PDF continuam os mesmos?** As coordenadas de escrita foram
    calibradas à mão contra cada `modelo_*.pdf`. Se a Iguá revisar um formulário e
    alguém trocar o arquivo, o texto passa a sair fora do lugar — e isso só aparece
    no PDF impresso, já em campo.
