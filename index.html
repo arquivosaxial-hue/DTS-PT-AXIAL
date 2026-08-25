@@ -160,7 +160,7 @@ const {
   useRef,
   useEffect
 } = React;
-const APP_VERSION = "V5";
+const APP_VERSION = "V6";
 
 // ===== CONFIG SUPABASE =====
 const SUPABASE_URL = "https://atbkjmvogkuekrcoevkn.supabase.co";
@@ -514,6 +514,15 @@ const LIMITES_DTS = {
   atividade: 88,
   local: 46
 };
+
+// ===== SERVIÇOS EXECUTADOS =====
+// Lista fechada, definida com a Axial. Texto livre não serve aqui: em ação
+// trabalhista a pergunta é "que serviço esta pessoa executou, em que dia?", e
+// "Reaterro", "reaterro" e "Reat." são três respostas diferentes para o banco.
+// Não há campo "Outro" de propósito — "Serviços Gerais" é a saída para o que
+// não se encaixa, e um campo livre reabriria justamente o problema que esta
+// lista fecha.
+const SERVICOS = ["Reaterro", "Recomposição de Calçada", "Base de Concreto", "Recomposição de Lajota/Paralelepípedo", "Plantio de Grama", "Recomposição de Asfalto Quente (CBUQ)", "Recomposição de Asfalto Frio", "Pintura Viária", "Serviços Gerais"];
 function fmtData(d) {
   const dd = String(d.getDate()).padStart(2, "0"),
     mm = String(d.getMonth() + 1).padStart(2, "0");
@@ -1225,6 +1234,181 @@ function QRAppModal({
   }, "Fechar")));
 }
 
+// ===== EFETIVO =====
+// O encarregado não faz login, mas precisa da lista de colaboradores para
+// montar a equipe — e precisa dela EM VALA, sem sinal. Por isso a lista mora
+// no localStorage e a rede serve só para atualizá-la: sem sinal, vale a última
+// baixada. Uma lista que só existisse online travaria a emissão do documento
+// em campo, que é o cenário normal de uso, não a exceção.
+const EFETIVO_CACHE = "axial_efetivo_v1";
+function lerEfetivoCache() {
+  try {
+    const bruto = localStorage.getItem(EFETIVO_CACHE);
+    if (!bruto) return {
+      lista: [],
+      em: null
+    };
+    const o = JSON.parse(bruto);
+    return {
+      lista: Array.isArray(o.lista) ? o.lista : [],
+      em: o.em || null
+    };
+  } catch (_) {
+    return {
+      lista: [],
+      em: null
+    };
+  }
+}
+async function baixarEfetivo() {
+  const {
+    data,
+    error
+  } = await supa.rpc("listar_efetivo");
+  if (error) throw error;
+  const lista = (data || []).map(c => ({
+    codigo: String(c.codigo || ""),
+    nome: c.nome || "",
+    funcao: c.funcao || ""
+  }));
+  try {
+    localStorage.setItem(EFETIVO_CACHE, JSON.stringify({
+      lista,
+      em: new Date().toISOString()
+    }));
+  } catch (_) {} // aparelho com armazenamento cheio: segue com a lista em memória
+  return lista;
+}
+function useEfetivo() {
+  // começa pelo cache, de forma síncrona: a tela nunca aparece vazia esperando rede
+  const [estado, setEstado] = useState(() => lerEfetivoCache());
+  useEffect(() => {
+    let vivo = true;
+    (async () => {
+      try {
+        const lista = await baixarEfetivo();
+        if (vivo) setEstado({
+          lista,
+          em: new Date().toISOString()
+        });
+      } catch (_) {/* offline: fica com o cache — que é exatamente o objetivo */}
+    })();
+    return () => {
+      vivo = false;
+    };
+  }, []);
+  return estado; // {lista, em}
+}
+
+// Escolhe o colaborador no efetivo trazendo a MATRÍCULA junto. É a matrícula que
+// torna o histórico consultável anos depois: nome digitado vira "João da Silva",
+// "Joao Silva" e "J. da Silva" — três pessoas para o banco.
+//
+// Quem não está no efetivo (terceirizado, contratado na véspera) continua podendo
+// ser digitado: aparece no documento e assina normalmente, mas entra sem matrícula
+// — e a tela diz isso, em vez de deixar o encarregado achar que ficou rastreável.
+function SeletorColaborador({
+  efetivo,
+  jaEscolhidos,
+  onAdd,
+  placeholder
+}) {
+  const [busca, setBusca] = useState("");
+  const q = busca.trim().toLowerCase();
+  const escolhidos = new Set((jaEscolhidos || []).filter(Boolean));
+  const achados = !q ? [] : (efetivo || []).filter(c => !escolhidos.has(c.codigo)).filter(c => c.nome.toLowerCase().includes(q) || c.codigo.toLowerCase().includes(q)).slice(0, 8);
+  const escolher = c => {
+    onAdd({
+      codigo: c.codigo,
+      nome: c.nome
+    });
+    setBusca("");
+  };
+  const digitar = () => {
+    const v = busca.trim();
+    if (!v) return;
+    onAdd({
+      codigo: null,
+      nome: v
+    });
+    setBusca("");
+  };
+  return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "team-add"
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "text",
+    value: busca,
+    onChange: e => setBusca(e.target.value),
+    onKeyDown: e => {
+      if (e.key !== "Enter") return;
+      e.preventDefault();
+      if (achados.length === 1) escolher(achados[0]);else digitar();
+    },
+    placeholder: placeholder || "Nome ou matrícula"
+  }), /*#__PURE__*/React.createElement("button", {
+    className: "btn btn-light",
+    onClick: digitar,
+    disabled: !busca.trim()
+  }, "+ Add")), achados.length > 0 && /*#__PURE__*/React.createElement("div", {
+    style: {
+      border: "1px solid #ddd",
+      borderRadius: 8,
+      marginTop: 6,
+      overflow: "hidden"
+    }
+  }, achados.map(c => /*#__PURE__*/React.createElement("div", {
+    key: c.codigo,
+    onClick: () => escolher(c),
+    style: {
+      padding: "9px 11px",
+      borderBottom: "1px solid #f0f0f0",
+      cursor: "pointer",
+      fontSize: 14
+    }
+  }, /*#__PURE__*/React.createElement("b", null, c.nome), /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: "#888",
+      fontSize: 12
+    }
+  }, " \xB7 ", c.codigo, c.funcao ? " · " + c.funcao : "")))), q && !achados.length && /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 12,
+      color: "#7A5510",
+      background: "#FFF6E5",
+      border: "1px solid #E7C77A",
+      borderRadius: 8,
+      padding: "8px 10px",
+      margin: "6px 0 0"
+    }
+  }, "Ningu\xE9m no efetivo com \"", busca.trim(), "\". Se adicionar assim, entra ", /*#__PURE__*/React.createElement("b", null, "sem matr\xEDcula"), "e n\xE3o aparecer\xE1 na busca por colaborador do painel."), !(efetivo || []).length && /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 12,
+      color: "#999",
+      margin: "6px 0 0"
+    }
+  }, "O efetivo ainda n\xE3o foi baixado neste aparelho. Abra o app uma vez com sinal para carregar a lista; depois ela funciona offline."));
+}
+
+// Linha da equipe já montada. A matrícula aparece do lado do nome porque é ela
+// que o painel vai buscar depois — quem preenche precisa ver se ficou lá.
+function EtiquetaColab({
+  m
+}) {
+  return /*#__PURE__*/React.createElement("span", {
+    className: "nome"
+  }, m.nome, m.codigo ? /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: "#888",
+      fontSize: 11
+    }
+  }, " \xB7 ", m.codigo) : /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: "#B07A16",
+      fontSize: 11
+    }
+  }, " \xB7 sem matr\xEDcula"));
+}
+
 // --- Canvas de rubrica ---
 function RubricaModal({
   onClose,
@@ -1358,7 +1542,7 @@ function App({
     ...o,
     [k]: v
   }));
-  const [nomeTmp, setNomeTmp] = useState("");
+  const efetivo = useEfetivo();
   const [equipe, setEquipe] = useState([]); // [{nome, rubrica}]
   const [rubricaIdx, setRubricaIdx] = useState(null);
   const [toast, setToast] = useState(null);
@@ -1417,6 +1601,7 @@ function App({
     epis,
     outros,
     equipe: equipe.map(m => ({
+      codigo: m.codigo || null,
       nome: m.nome
     }))
   });
@@ -1500,6 +1685,7 @@ function App({
     setOutros(d.outros || {});
     // equipe volta com os nomes, mas SEM rubrica (cada um precisa rubricar de novo)
     setEquipe((d.equipe || []).map(m => ({
+      codigo: m.codigo || null,
       nome: m.nome,
       rubrica: null
     })));
@@ -1599,15 +1785,11 @@ function App({
     ...m,
     [eid]: (m[eid] || []).filter((_, i) => i !== idx)
   }));
-  const addNome = () => {
-    const v = nomeTmp.trim();
-    if (!v) return;
-    setEquipe([...equipe, {
-      nome: v,
-      rubrica: null
-    }]);
-    setNomeTmp("");
-  };
+  const addColab = c => setEquipe([...equipe, {
+    codigo: c.codigo,
+    nome: c.nome,
+    rubrica: null
+  }]);
   const setRubrica = (idx, dataUrl) => setEquipe(eq => eq.map((m, i) => i === idx ? {
     ...m,
     rubrica: dataUrl
@@ -1974,6 +2156,13 @@ function App({
       mostraToast("Preencha o Nº da O.S.", true);
       return;
     }
+    // Sem serviço escolhido não há o que rastrear depois — e o campo agora é uma
+    // lista fechada, então "não achei o meu" não é motivo para deixar em branco:
+    // "Serviços Gerais" está lá para isso.
+    if (!atividade) {
+      mostraToast("Selecione o serviço executado.", true);
+      return;
+    }
     if (tipoEquipe === "contratada" && !empresaEfetiva.trim()) {
       mostraToast("Informe o nome da empresa contratada.", true);
       return;
@@ -2036,7 +2225,10 @@ function App({
         numero_os_base: osBase,
         cliente_id: novoIdCliente()
       };
-      const colaboradores = equipe.map(m => m.nome);
+      const colaboradores = equipe.map(m => ({
+        codigo: m.codigo || null,
+        nome: m.nome
+      }));
       const osNome = osEfetiva.replace(/[^\w.-]+/g, "_") || "sem_os";
 
       // 3) guarda cópia local "DTSs de hoje"
@@ -2057,9 +2249,7 @@ function App({
         riscosManuais,
         epis,
         outros,
-        equipe: colaboradores.map(nome => ({
-          nome
-        }))
+        equipe: colaboradores
       };
       await salvarLocal({
         id: localId,
@@ -2263,13 +2453,23 @@ function App({
     maxLength: LIMITES_DTS.area,
     value: area,
     onChange: e => setArea(e.target.value)
-  }))), /*#__PURE__*/React.createElement("label", null, "Atividade a ser executada"), /*#__PURE__*/React.createElement("input", {
-    type: "text",
-    maxLength: LIMITES_DTS.atividade,
+  }))), /*#__PURE__*/React.createElement("label", null, "Atividade a ser executada"), /*#__PURE__*/React.createElement("select", {
     value: atividade,
     onChange: e => setAtividade(e.target.value),
-    placeholder: "Descreva a atividade do dia"
-  }), /*#__PURE__*/React.createElement("label", null, "Localiza\xE7\xE3o do trabalho"), /*#__PURE__*/React.createElement("input", {
+    style: {
+      width: "100%",
+      padding: 11,
+      fontSize: 15,
+      border: "1px solid #ccc",
+      borderRadius: 8,
+      background: "#fff"
+    }
+  }, /*#__PURE__*/React.createElement("option", {
+    value: ""
+  }, "Selecione o servi\xE7o\u2026"), SERVICOS.map(s => /*#__PURE__*/React.createElement("option", {
+    key: s,
+    value: s
+  }, s))), /*#__PURE__*/React.createElement("label", null, "Localiza\xE7\xE3o do trabalho"), /*#__PURE__*/React.createElement("input", {
     type: "text",
     maxLength: LIMITES_DTS.local,
     value: local,
@@ -2521,23 +2721,17 @@ function App({
     onChange: v => setOutro("epis", v)
   })), /*#__PURE__*/React.createElement("div", {
     className: "section"
-  }, /*#__PURE__*/React.createElement("h2", null, "Equipe (colaboradores)"), /*#__PURE__*/React.createElement("div", {
-    className: "team-add"
-  }, /*#__PURE__*/React.createElement("input", {
-    type: "text",
-    value: nomeTmp,
-    onChange: e => setNomeTmp(e.target.value),
-    onKeyDown: e => e.key === "Enter" && addNome(),
-    placeholder: "Nome do colaborador"
-  }), /*#__PURE__*/React.createElement("button", {
-    className: "btn btn-light",
-    onClick: addNome
-  }, "+ Add")), equipe.map((m, i) => /*#__PURE__*/React.createElement("div", {
+  }, /*#__PURE__*/React.createElement("h2", null, "Equipe (colaboradores)"), /*#__PURE__*/React.createElement(SeletorColaborador, {
+    efetivo: efetivo.lista,
+    onAdd: addColab,
+    jaEscolhidos: equipe.map(m => m.codigo),
+    placeholder: "Nome ou matr\xEDcula do colaborador"
+  }), equipe.map((m, i) => /*#__PURE__*/React.createElement("div", {
     key: i,
     className: "team-item"
-  }, /*#__PURE__*/React.createElement("span", {
-    className: "nome"
-  }, m.nome), m.rubrica ? /*#__PURE__*/React.createElement("img", {
+  }, /*#__PURE__*/React.createElement(EtiquetaColab, {
+    m: m
+  }), m.rubrica ? /*#__PURE__*/React.createElement("img", {
     src: m.rubrica,
     className: "rubrica-mini",
     alt: "rubrica",
@@ -2620,6 +2814,8 @@ const CFG_DTS = {
   colLocal: "localizacao",
   colLider: "lider_frente",
   alertaRisco: true,
+  filtroAtividade: true,
+  // só a DTS tem a coluna 'atividade' com a lista fechada
   select: "id,created_at,numero_os,atividade,localizacao,lider_frente,pdf_path,data_atividade,riscos,excluido_em"
 };
 // As tabelas pt_quente / pt_quente_colaborador são anteriores à unificação em 'pt'.
@@ -2648,6 +2844,565 @@ const CFG_PT = {
 function alertasRiscoAlto(item) {
   const riscos = Array.isArray(item && item.riscos) ? item.riscos : [];
   return riscos.filter(r => r && (r.alerta_sem_controle === true || r.nivel === "A" && !String(r.controle || "").trim())).map(r => r.nome || r.passo || "(risco sem nome)");
+}
+
+// ===== IMPORTAÇÃO DO EFETIVO =====
+// Lê CSV, não .xlsx. É uma decisão, não uma limitação: um leitor de xlsx é uma
+// biblioteca nova de ~900 KB no app inteiro, com versão para fixar e hash SRI
+// para manter, só para uma tela que o administrador usa uma vez por mês. No
+// Excel: Arquivo → Salvar como → "CSV UTF-8 (delimitado por vírgulas)".
+function separadorDe(linha) {
+  // Excel em pt-BR grava com ponto-e-vírgula; o "CSV UTF-8" grava com vírgula.
+  const c = (linha.match(/,/g) || []).length,
+    pv = (linha.match(/;/g) || []).length;
+  const tab = (linha.match(/\t/g) || []).length; // colado direto da planilha
+  if (tab >= c && tab >= pv && tab > 0) return "\t";
+  return pv > c ? ";" : ",";
+}
+function lerLinhaCSV(linha, sep) {
+  const campos = [];
+  let atual = "";
+  let aspas = false;
+  for (let i = 0; i < linha.length; i++) {
+    const ch = linha[i];
+    if (aspas) {
+      if (ch === '"') {
+        if (linha[i + 1] === '"') {
+          atual += '"';
+          i++;
+        } else aspas = false;
+      } else atual += ch;
+    } else if (ch === '"') aspas = true;else if (ch === sep) {
+      campos.push(atual);
+      atual = "";
+    } else atual += ch;
+  }
+  campos.push(atual);
+  return campos.map(c => c.trim());
+}
+
+// Aceita os cabeçalhos como saem da planilha do RH, com ou sem acento.
+function acharColuna(cabecalho, nomes) {
+  const norm = s => String(s || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
+  for (const nome of nomes) {
+    const i = cabecalho.findIndex(h => norm(h) === norm(nome));
+    if (i >= 0) return i;
+  }
+  return -1;
+}
+function lerPlanilhaEfetivo(texto) {
+  const linhas = String(texto || "").replace(/\r/g, "").split("\n").filter(l => l.trim());
+  if (linhas.length < 2) return {
+    erro: "A planilha precisa do cabeçalho e ao menos uma linha."
+  };
+  const sep = separadorDe(linhas[0]);
+  const cab = lerLinhaCSV(linhas[0], sep);
+  const iCod = acharColuna(cab, ["Código", "Codigo", "Matrícula", "Matricula"]);
+  const iNom = acharColuna(cab, ["Nome", "Colaborador"]);
+  const iFun = acharColuna(cab, ["Função", "Funcao", "Cargo"]);
+  const iSit = acharColuna(cab, ["Situação", "Situacao", "Status"]);
+  if (iCod < 0 || iNom < 0) return {
+    erro: "Não achei as colunas \"Código\" e \"Nome\" no cabeçalho. Encontrei: " + cab.join(" | ")
+  };
+  const ok = [],
+    ruins = [];
+  const vistos = new Set();
+  for (let i = 1; i < linhas.length; i++) {
+    const c = lerLinhaCSV(linhas[i], sep);
+    // Matrícula é TEXTO: '001104' com zeros à esquerda. Se o Excel tiver comido
+    // os zeros, o vínculo com a planilha do RH quebra — e não há como adivinhar.
+    const codigo = (c[iCod] || "").replace(/^'/, "").trim();
+    const nome = (c[iNom] || "").trim();
+    if (!codigo && !nome) continue;
+    if (!codigo || !nome) {
+      ruins.push({
+        linha: i + 1,
+        motivo: "código ou nome em branco"
+      });
+      continue;
+    }
+    if (vistos.has(codigo)) {
+      ruins.push({
+        linha: i + 1,
+        motivo: "código " + codigo + " repetido na planilha"
+      });
+      continue;
+    }
+    vistos.add(codigo);
+    const sitBruta = (iSit >= 0 ? c[iSit] || "" : "").toLowerCase();
+    const situacao = /desligad|demitid|inativ/.test(sitBruta) ? "desligado" : /afastad|licen/.test(sitBruta) ? "afastado" : "ativo";
+    ok.push({
+      codigo,
+      nome,
+      funcao: iFun >= 0 ? (c[iFun] || "").trim() : "",
+      situacao
+    });
+  }
+  return {
+    linhas: ok,
+    ruins
+  };
+}
+
+// ===== EFETIVO — tela do administrador =====
+// Fica dentro do painel de propósito: já há sessão autenticada aqui, e o efetivo
+// é dado pessoal de trabalhador (LGPD). Uma tela separada exigiria repetir o
+// login — e login repetido é login mal feito.
+//
+// Ninguém é APAGADO desta tabela. Quem processa a empresa costuma ser
+// ex-funcionário, e é justamente o histórico dele que a defesa precisa. Quem sai
+// vira "desligado": some do formulário em campo, continua no banco e nos filtros.
+function TelaEfetivo({
+  onVoltar
+}) {
+  const [lista, setLista] = useState([]);
+  const [carregando, setCarregando] = useState(false);
+  const [msg, setMsg] = useState("");
+  const [erro, setErro] = useState("");
+  const [busca, setBusca] = useState("");
+  const [novo, setNovo] = useState({
+    codigo: "",
+    nome: "",
+    funcao: ""
+  });
+  const [texto, setTexto] = useState(""); // planilha colada
+  const [previa, setPrevia] = useState(null); // {linhas, ruins}
+  const [desligarAusentes, setDesligarAusentes] = useState(true);
+  const arquivoRef = React.useRef(null);
+  async function carregar() {
+    setCarregando(true);
+    setErro("");
+    try {
+      const {
+        data,
+        error
+      } = await supa.from("colaboradores").select("codigo,nome,funcao,situacao,atualizado_em").order("nome");
+      if (error) throw error;
+      setLista(data || []);
+    } catch (e) {
+      setErro("Não foi possível carregar o efetivo: " + e.message);
+    } finally {
+      setCarregando(false);
+    }
+  }
+  useEffect(() => {
+    carregar();
+  }, []);
+  const filtrada = (() => {
+    const q = busca.trim().toLowerCase();
+    if (!q) return lista;
+    return lista.filter(c => String(c.nome || "").toLowerCase().includes(q) || String(c.codigo || "").toLowerCase().includes(q) || String(c.funcao || "").toLowerCase().includes(q));
+  })();
+  const ativos = lista.filter(c => c.situacao === "ativo").length;
+  async function salvarUm() {
+    const codigo = novo.codigo.trim(),
+      nome = novo.nome.trim();
+    if (!codigo || !nome) {
+      setErro("Matrícula e nome são obrigatórios.");
+      return;
+    }
+    setCarregando(true);
+    setErro("");
+    setMsg("");
+    try {
+      const {
+        error
+      } = await supa.from("colaboradores").upsert({
+        codigo,
+        nome,
+        funcao: novo.funcao.trim() || null,
+        situacao: "ativo",
+        atualizado_em: new Date().toISOString()
+      }, {
+        onConflict: "codigo"
+      });
+      if (error) throw error;
+      setNovo({
+        codigo: "",
+        nome: "",
+        funcao: ""
+      });
+      setMsg(nome + " salvo.");
+      await carregar();
+    } catch (e) {
+      setErro("Erro ao salvar: " + e.message);
+    } finally {
+      setCarregando(false);
+    }
+  }
+  async function mudarSituacao(c, situacao) {
+    setCarregando(true);
+    setErro("");
+    setMsg("");
+    try {
+      const {
+        error
+      } = await supa.from("colaboradores").update({
+        situacao,
+        atualizado_em: new Date().toISOString()
+      }).eq("codigo", c.codigo);
+      if (error) throw error;
+      setLista(l => l.map(x => x.codigo === c.codigo ? {
+        ...x,
+        situacao
+      } : x));
+      setMsg(c.nome + " agora está " + situacao + ".");
+    } catch (e) {
+      setErro("Erro ao alterar: " + e.message);
+    } finally {
+      setCarregando(false);
+    }
+  }
+  function analisar(bruto) {
+    setErro("");
+    setMsg("");
+    const r = lerPlanilhaEfetivo(bruto);
+    if (r.erro) {
+      setPrevia(null);
+      setErro(r.erro);
+      return;
+    }
+    if (!r.linhas.length) {
+      setPrevia(null);
+      setErro("Nenhuma linha aproveitável na planilha.");
+      return;
+    }
+    setPrevia(r);
+  }
+  function escolherArquivo(e) {
+    const f = e.target.files && e.target.files[0];
+    if (!f) return;
+    const leitor = new FileReader();
+    leitor.onload = () => {
+      setTexto(String(leitor.result || ""));
+      analisar(leitor.result);
+    };
+    // planilha do RH quase sempre sai em UTF-8; se vier em ANSI, os acentos
+    // aparecem errados na prévia — e é para isso que a prévia existe
+    leitor.readAsText(f, "utf-8");
+    e.target.value = "";
+  }
+  async function confirmarImportacao() {
+    if (!previa) return;
+    const novos = previa.linhas;
+    const naPlanilha = new Set(novos.map(c => c.codigo));
+    const somem = desligarAusentes ? lista.filter(c => c.situacao === "ativo" && !naPlanilha.has(c.codigo)) : [];
+    const conf = window.confirm("Importar " + novos.length + " colaborador(es)?\n\n" + (somem.length ? somem.length + " pessoa(s) que estão ativas mas não aparecem na planilha " + "serão marcadas como DESLIGADAS.\n\n" : "") + "Ninguém é apagado: o histórico de documentos continua intacto.");
+    if (!conf) return;
+    setCarregando(true);
+    setErro("");
+    setMsg("");
+    try {
+      const agora = new Date().toISOString();
+      for (let i = 0; i < novos.length; i += 200) {
+        const fatia = novos.slice(i, i + 200).map(c => ({
+          codigo: c.codigo,
+          nome: c.nome,
+          funcao: c.funcao || null,
+          situacao: c.situacao,
+          atualizado_em: agora
+        }));
+        const {
+          error
+        } = await supa.from("colaboradores").upsert(fatia, {
+          onConflict: "codigo"
+        });
+        if (error) throw error;
+      }
+      if (somem.length) {
+        const codigos = somem.map(c => c.codigo);
+        for (let i = 0; i < codigos.length; i += 200) {
+          const {
+            error
+          } = await supa.from("colaboradores").update({
+            situacao: "desligado",
+            atualizado_em: agora
+          }).in("codigo", codigos.slice(i, i + 200));
+          if (error) throw error;
+        }
+      }
+      setPrevia(null);
+      setTexto("");
+      setMsg(novos.length + " colaborador(es) importados." + (somem.length ? " " + somem.length + " marcados como desligados." : ""));
+      await carregar();
+      // o aparelho de quem importou também precisa da lista nova
+      try {
+        await baixarEfetivo();
+      } catch (_) {}
+    } catch (e) {
+      setErro("Erro na importação: " + e.message);
+    } finally {
+      setCarregando(false);
+    }
+  }
+  const cor = {
+    ativo: "#2E7D32",
+    afastado: "#BA7517",
+    desligado: "#A32D2D"
+  };
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      maxWidth: 760,
+      margin: "0 auto",
+      padding: 16,
+      background: "#fff",
+      minHeight: "100vh"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "header",
+    style: {
+      borderRadius: 10
+    }
+  }, /*#__PURE__*/React.createElement("h1", null, "Efetivo"), /*#__PURE__*/React.createElement("p", null, lista.length, " cadastrado(s) \xB7 ", ativos, " ativo(s)")), /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 12.5,
+      color: "#666",
+      lineHeight: 1.5,
+      margin: "14px 0"
+    }
+  }, "Esta \xE9 a lista que aparece no formul\xE1rio em campo. S\xF3 quem est\xE1 ", /*#__PURE__*/React.createElement("b", null, "ativo"), " \xE9 oferecido ao encarregado \u2014 mas ", /*#__PURE__*/React.createElement("b", null, "ningu\xE9m some do hist\xF3rico"), ": um colaborador desligado continua ligado a todas as DTS e PT que assinou."), erro && /*#__PURE__*/React.createElement("p", {
+    style: {
+      color: "#A32D2D",
+      fontSize: 13,
+      background: "#FDEDED",
+      border: "1px solid #F0C2C2",
+      borderRadius: 8,
+      padding: "9px 11px"
+    }
+  }, erro), msg && /*#__PURE__*/React.createElement("p", {
+    style: {
+      color: "#2E7D32",
+      fontSize: 13
+    }
+  }, msg), /*#__PURE__*/React.createElement("div", {
+    className: "section"
+  }, /*#__PURE__*/React.createElement("h2", null, "Importar planilha"), /*#__PURE__*/React.createElement("p", {
+    className: "hint"
+  }, "No Excel: ", /*#__PURE__*/React.createElement("b", null, "Arquivo \u2192 Salvar como \u2192 CSV UTF-8"), ". Precisa ter as colunas", /*#__PURE__*/React.createElement("b", null, " C\xF3digo"), " e ", /*#__PURE__*/React.createElement("b", null, " Nome"), "; ", /*#__PURE__*/React.createElement("b", null, "Fun\xE7\xE3o"), " e ", /*#__PURE__*/React.createElement("b", null, "Situa\xE7\xE3o"), " entram se existirem. Tamb\xE9m d\xE1 para copiar as c\xE9lulas e colar no campo abaixo."), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 8,
+      flexWrap: "wrap",
+      alignItems: "center",
+      margin: "8px 0"
+    }
+  }, /*#__PURE__*/React.createElement("input", {
+    ref: arquivoRef,
+    type: "file",
+    accept: ".csv,.txt,text/csv,text/plain",
+    onChange: escolherArquivo,
+    style: {
+      fontSize: 13
+    }
+  })), /*#__PURE__*/React.createElement("textarea", {
+    value: texto,
+    onChange: e => setTexto(e.target.value),
+    placeholder: "Código;Nome;Função;Situação\n001104;Anderson de Souza;Pedreiro;Ativo",
+    style: {
+      width: "100%",
+      minHeight: 90,
+      padding: 10,
+      fontSize: 13,
+      fontFamily: "monospace",
+      border: "1px solid #ccc",
+      borderRadius: 8,
+      boxSizing: "border-box"
+    }
+  }), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 8,
+      marginTop: 8,
+      flexWrap: "wrap"
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "btn btn-light",
+    disabled: !texto.trim(),
+    onClick: () => analisar(texto)
+  }, "Conferir"), previa && /*#__PURE__*/React.createElement("button", {
+    className: "btn btn-blue",
+    disabled: carregando,
+    onClick: confirmarImportacao
+  }, carregando ? "Importando…" : "Importar " + previa.linhas.length), previa && /*#__PURE__*/React.createElement("button", {
+    className: "btn btn-light",
+    onClick: () => {
+      setPrevia(null);
+      setTexto("");
+    }
+  }, "Cancelar")), previa && /*#__PURE__*/React.createElement("div", {
+    style: {
+      border: "1px solid #dbe6f2",
+      background: "#f7fafd",
+      borderRadius: 10,
+      padding: "12px 14px",
+      marginTop: 12
+    }
+  }, /*#__PURE__*/React.createElement("p", {
+    style: {
+      margin: "0 0 8px",
+      fontSize: 13,
+      color: "#0C447C"
+    }
+  }, /*#__PURE__*/React.createElement("b", null, previa.linhas.length, " linha(s) lidas."), " Confira os acentos e os zeros \xE0 esquerda da matr\xEDcula antes de importar."), /*#__PURE__*/React.createElement("label", {
+    style: {
+      fontSize: 13,
+      display: "flex",
+      alignItems: "center",
+      gap: 8,
+      margin: "0 0 10px",
+      color: "#333"
+    }
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "checkbox",
+    checked: desligarAusentes,
+    onChange: e => setDesligarAusentes(e.target.checked)
+  }), "Marcar como desligado quem est\xE1 ativo mas n\xE3o aparece nesta planilha"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      maxHeight: 180,
+      overflowY: "auto",
+      fontSize: 12,
+      fontFamily: "monospace",
+      color: "#444"
+    }
+  }, previa.linhas.slice(0, 50).map(c => /*#__PURE__*/React.createElement("div", {
+    key: c.codigo
+  }, c.codigo, " \xB7 ", c.nome, c.funcao ? " · " + c.funcao : "", c.situacao !== "ativo" ? " · " + c.situacao : "")), previa.linhas.length > 50 && /*#__PURE__*/React.createElement("div", {
+    style: {
+      color: "#999"
+    }
+  }, "\u2026 e mais ", previa.linhas.length - 50)), previa.ruins && previa.ruins.length > 0 && /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 12,
+      color: "#7A5510",
+      background: "#FFF6E5",
+      border: "1px solid #E7C77A",
+      borderRadius: 8,
+      padding: "8px 10px",
+      margin: "10px 0 0"
+    }
+  }, previa.ruins.length, " linha(s) ignoradas: ", previa.ruins.slice(0, 5).map(r => "linha " + r.linha + " (" + r.motivo + ")").join("; "), previa.ruins.length > 5 ? "…" : ""))), /*#__PURE__*/React.createElement("div", {
+    className: "section"
+  }, /*#__PURE__*/React.createElement("h2", null, "Cadastrar um colaborador"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 8,
+      flexWrap: "wrap",
+      alignItems: "flex-end"
+    }
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", null, "Matr\xEDcula"), /*#__PURE__*/React.createElement("input", {
+    type: "text",
+    value: novo.codigo,
+    onChange: e => setNovo({
+      ...novo,
+      codigo: e.target.value
+    }),
+    placeholder: "001104",
+    style: {
+      width: 110
+    }
+  })), /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: 1,
+      minWidth: 180
+    }
+  }, /*#__PURE__*/React.createElement("label", null, "Nome"), /*#__PURE__*/React.createElement("input", {
+    type: "text",
+    value: novo.nome,
+    onChange: e => setNovo({
+      ...novo,
+      nome: e.target.value
+    })
+  })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", null, "Fun\xE7\xE3o"), /*#__PURE__*/React.createElement("input", {
+    type: "text",
+    value: novo.funcao,
+    onChange: e => setNovo({
+      ...novo,
+      funcao: e.target.value
+    }),
+    placeholder: "Pedreiro",
+    style: {
+      width: 150
+    }
+  })), /*#__PURE__*/React.createElement("button", {
+    className: "btn btn-blue",
+    disabled: carregando,
+    onClick: salvarUm
+  }, "Salvar")), /*#__PURE__*/React.createElement("p", {
+    className: "hint",
+    style: {
+      marginTop: 6
+    }
+  }, "Matr\xEDcula que j\xE1 existe \xE9 atualizada, n\xE3o duplicada.")), /*#__PURE__*/React.createElement("div", {
+    className: "section"
+  }, /*#__PURE__*/React.createElement("h2", null, "Cadastrados"), /*#__PURE__*/React.createElement("input", {
+    type: "text",
+    value: busca,
+    onChange: e => setBusca(e.target.value),
+    placeholder: "Buscar por nome, matr\xEDcula ou fun\xE7\xE3o"
+  }), /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 10
+    }
+  }, carregando && !lista.length && /*#__PURE__*/React.createElement("p", {
+    style: {
+      color: "#888",
+      fontSize: 13
+    }
+  }, "Carregando\u2026"), !carregando && !filtrada.length && /*#__PURE__*/React.createElement("p", {
+    style: {
+      color: "#888",
+      fontSize: 13
+    }
+  }, "Ningu\xE9m encontrado."), filtrada.map(c => /*#__PURE__*/React.createElement("div", {
+    key: c.codigo,
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 10,
+      padding: "9px 0",
+      borderBottom: "1px solid #f0f0f0",
+      flexWrap: "wrap"
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      flex: 1,
+      minWidth: 170,
+      fontSize: 14
+    }
+  }, c.nome, /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: "#888",
+      fontSize: 11
+    }
+  }, " \xB7 ", c.codigo, c.funcao ? " · " + c.funcao : "")), /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 11,
+      fontWeight: 600,
+      color: cor[c.situacao] || "#666"
+    }
+  }, c.situacao), /*#__PURE__*/React.createElement("select", {
+    value: c.situacao,
+    onChange: e => mudarSituacao(c, e.target.value),
+    disabled: carregando,
+    style: {
+      padding: "5px 7px",
+      fontSize: 12,
+      border: "1px solid #ccc",
+      borderRadius: 6,
+      background: "#fff"
+    }
+  }, /*#__PURE__*/React.createElement("option", {
+    value: "ativo"
+  }, "ativo"), /*#__PURE__*/React.createElement("option", {
+    value: "afastado"
+  }, "afastado"), /*#__PURE__*/React.createElement("option", {
+    value: "desligado"
+  }, "desligado")))))), /*#__PURE__*/React.createElement("div", {
+    className: "footer-actions"
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "btn btn-light",
+    onClick: onVoltar
+  }, "\u2190 Voltar ao painel")));
 }
 function PainelAdm({
   onVoltar,
@@ -2929,6 +3684,12 @@ function PainelAdm({
   const [de, setDe] = useState("");
   const [ate, setAte] = useState("");
   const [tipoFiltro, setTipoFiltro] = useState("");
+  // Filtros que existem por causa das ações trabalhistas: a pergunta que chega
+  // é sempre "o que o colaborador X fez, na OS Y, no serviço Z".
+  const [osFiltro, setOsFiltro] = useState("");
+  const [colabFiltro, setColabFiltro] = useState("");
+  const [ativFiltro, setAtivFiltro] = useState("");
+  const [verEfetivo, setVerEfetivo] = useState(false);
   const [lista, setLista] = useState([]);
   const [carregando, setCarregando] = useState(false);
   const [prog, setProg] = useState(null); // {feitos,total,restante} do "Baixar todos"
@@ -3006,22 +3767,119 @@ function PainelAdm({
       setLimpando(false);
     }
   }
+
+  // Um só lugar decide o que os filtros fazem — a listagem, o CSV e o envio à
+  // lixeira usam os TRÊS o mesmo. Antes o "enviar período à lixeira" ignorava
+  // filtros que a tela mostrava, e apagava mais do que estava na frente de quem
+  // clicou. Aqui isso não pode voltar a acontecer por descuido.
+  function selecaoComFiltros() {
+    // o filtro por pessoa exige juntar a tabela de colaboradores: !inner devolve
+    // só os documentos que têm alguém batendo com a busca
+    return colabFiltro.trim() ? cfg.select + "," + cfg.colab + "!inner(codigo,nome)" : cfg.select;
+  }
+  function aplicarFiltros(q) {
+    if (de) q = q.gte("data_atividade", de);
+    if (ate) q = q.lte("data_atividade", ate);
+    if (cfg.filtroTipo && tipoFiltro) q = q.eq("tipo", tipoFiltro);
+    // OS parcial: a revisão vira sufixo (" Rev.01"), então igualdade não serve
+    if (osFiltro.trim()) q = q.ilike("numero_os", "%" + osFiltro.trim() + "%");
+    if (cfg.filtroAtividade && ativFiltro) q = q.eq("atividade", ativFiltro);
+    const alvo = colabFiltro.trim();
+    if (alvo) {
+      // só dígitos = matrícula; qualquer outra coisa = nome
+      q = /^[0-9]+$/.test(alvo) ? q.ilike(cfg.colab + ".codigo", "%" + alvo + "%") : q.ilike(cfg.colab + ".nome", "%" + alvo + "%");
+    }
+    return q;
+  }
+  function resumoFiltros() {
+    const partes = [];
+    if (de || ate) partes.push("período " + (de || "início") + " a " + (ate || "hoje"));
+    if (cfg.filtroTipo && tipoFiltro) partes.push("tipo " + tipoFiltro);
+    if (osFiltro.trim()) partes.push("OS contendo \"" + osFiltro.trim() + "\"");
+    if (cfg.filtroAtividade && ativFiltro) partes.push("serviço \"" + ativFiltro + "\"");
+    if (colabFiltro.trim()) partes.push("colaborador \"" + colabFiltro.trim() + "\"");
+    return partes.length ? partes.join(", ") : "sem filtro nenhum";
+  }
+  function limparFiltros() {
+    setDe("");
+    setAte("");
+    setTipoFiltro("");
+    setOsFiltro("");
+    setColabFiltro("");
+    setAtivFiltro("");
+  }
+
+  // ---- RELATÓRIO POR COLABORADOR (CSV) ----
+  // O artefato que a defesa trabalhista pede: uma linha por pessoa por documento,
+  // com matrícula, data, OS e serviço. Sai do mesmo filtro que está na tela.
+  async function baixarCSV() {
+    setCarregando(true);
+    setMsg("");
+    try {
+      const montar = () => {
+        // aqui a junção é sempre necessária: o CSV é POR pessoa
+        const sel = cfg.select + "," + cfg.colab + (colabFiltro.trim() ? "!inner" : "") + "(codigo,nome,ordem)";
+        // 'id' entra como desempate: a paginação de 1000 em 1000 precisa de uma
+        // ordem estável, e num só dia há dezenas de documentos com a mesma data —
+        // sem desempate, o banco pode devolver a mesma linha duas vezes e pular outra.
+        let q = supa.from(cfg.tabela).select(sel).is("excluido_em", null).order("data_atividade", {
+          ascending: true
+        }).order("id", {
+          ascending: true
+        });
+        return aplicarFiltros(q);
+      };
+      const docs = await buscarTudo(montar);
+      if (!docs || !docs.length) {
+        setMsg("Nada a exportar com os filtros atuais.");
+        return;
+      }
+      const esc = v => '"' + String(v == null ? "" : v).replace(/"/g, '""') + '"';
+      const cab = ["Matricula", "Colaborador", "Data", "OS", "Documento", "Servico", "Local", "Lider"];
+      const linhas = [cab.map(esc).join(";")];
+      let semNinguem = 0;
+      for (const d of docs) {
+        const equipe = (d[cfg.colab] || []).slice().sort((a, b) => (a.ordem || 0) - (b.ordem || 0));
+        if (!equipe.length) {
+          semNinguem++;
+          continue;
+        }
+        for (const c of equipe) {
+          linhas.push([c.codigo || "", c.nome || "", d.data_atividade || (d.created_at || "").slice(0, 10), d.numero_os || "", cfg.rotulo + (d.tipo ? " " + d.tipo : ""), d[cfg.colTitulo] || "", d[cfg.colLocal] || "", d[cfg.colLider] || ""].map(esc).join(";"));
+        }
+      }
+      // BOM: sem ele o Excel abre "João" como "JoÃ£o"
+      const blob = new Blob(["\ufeff" + linhas.join("\r\n")], {
+        type: "text/csv;charset=utf-8"
+      });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "relatorio_" + cfg.prefixo.toLowerCase() + "_" + diaLocal() + ".csv";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      setMsg(linhas.length - 1 + " linha(s) exportadas de " + docs.length + " documento(s)." + (semNinguem ? " " + semNinguem + " documento(s) sem equipe registrada ficaram de fora." : ""));
+    } catch (e) {
+      setMsg("Erro ao gerar o relatório: " + e.message);
+    } finally {
+      setCarregando(false);
+    }
+  }
   async function buscar(lixeira) {
     const naLixeira = lixeira === undefined ? verLixeira : lixeira;
     setCarregando(true);
     setMsg("");
     try {
       const montar = () => {
-        let q = supa.from(cfg.tabela).select(cfg.select);
+        let q = supa.from(cfg.tabela).select(selecaoComFiltros());
         // a lixeira é o mesmo registro com excluido_em preenchido
         q = naLixeira ? q.not("excluido_em", "is", null) : q.is("excluido_em", null);
         q = q.order("created_at", {
           ascending: false
         });
-        if (de) q = q.gte("data_atividade", de);
-        if (ate) q = q.lte("data_atividade", ate);
-        if (cfg.filtroTipo && tipoFiltro) q = q.eq("tipo", tipoFiltro);
-        return q;
+        return aplicarFiltros(q);
       };
       const data = await buscarTudo(montar); // paginado: sem limite de 1000
       setLista(data || []);
@@ -3185,18 +4043,17 @@ function PainelAdm({
     // Descreve exatamente o que será afetado, incluindo o filtro de tipo.
     const rotuloTipo = cfg.filtroTipo && tipoFiltro ? ((cfg.tipos || []).find(t => t[0] === tipoFiltro) || ["", tipoFiltro])[1] : null;
     const alvoTxt = rotuloTipo ? cfg.rotulo + " do tipo \"" + rotuloTipo + "\"" : "TODOS os registros de " + cfg.rotulo;
-    const conf = window.confirm("Enviar para a LIXEIRA:\n\n" + alvoTxt + "\nde " + de + " até " + ate + ".\n\nOs registros saem das listagens, mas podem ser restaurados depois. Os PDFs são mantidos.");
+    const conf = window.confirm("Enviar para a LIXEIRA:\n\n" + alvoTxt + "\nde " + de + " até " + ate + "\n\nFiltros em vigor: " + resumoFiltros() + "\n\nOs registros saem das listagens, mas podem ser restaurados depois. Os PDFs são mantidos.");
     if (!conf) return;
     setCarregando(true);
     setMsg("");
     try {
       // 1) busca os alvos do período — PAGINADO e com os MESMOS filtros da tela
       const montar = () => {
-        let q = supa.from(cfg.tabela).select("id").is("excluido_em", null);
-        if (de) q = q.gte("data_atividade", de);
-        if (ate) q = q.lte("data_atividade", ate);
-        if (cfg.filtroTipo && tipoFiltro) q = q.eq("tipo", tipoFiltro); // <-- filtro de tipo agora é respeitado
-        return q;
+        // MESMOS filtros da listagem: o que se apaga é o que se está vendo
+        const sel = colabFiltro.trim() ? "id," + cfg.colab + "!inner(codigo,nome)" : "id";
+        let q = supa.from(cfg.tabela).select(sel).is("excluido_em", null);
+        return aplicarFiltros(q);
       };
       const alvos = await buscarTudo(montar);
       if (!alvos || !alvos.length) {
@@ -3404,6 +4261,9 @@ function PainelAdm({
       }
     }, "\u2190 Voltar ao in\xEDcio")));
   }
+  if (verEfetivo) return /*#__PURE__*/React.createElement(TelaEfetivo, {
+    onVoltar: () => setVerEfetivo(false)
+  });
   return /*#__PURE__*/React.createElement("div", {
     style: {
       maxWidth: 760,
@@ -3435,6 +4295,14 @@ function PainelAdm({
       textDecoration: "underline"
     }
   }, "alterar senha"), /*#__PURE__*/React.createElement("a", {
+    onClick: () => setVerEfetivo(true),
+    style: {
+      marginLeft: 10,
+      color: "#fff",
+      cursor: "pointer",
+      textDecoration: "underline"
+    }
+  }, "efetivo"), /*#__PURE__*/React.createElement("a", {
     onClick: sair,
     style: {
       marginLeft: 10,
@@ -3636,11 +4504,55 @@ function PainelAdm({
   }, cfg.tipos.map(([v, l]) => /*#__PURE__*/React.createElement("option", {
     key: v,
     value: v
-  }, l)))), /*#__PURE__*/React.createElement("button", {
+  }, l)))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", null, "N\xBA O.S."), /*#__PURE__*/React.createElement("input", {
+    type: "text",
+    value: osFiltro,
+    onChange: e => setOsFiltro(e.target.value),
+    onKeyDown: e => e.key === "Enter" && buscar(),
+    placeholder: "Ex: 12345",
+    style: {
+      width: 120
+    }
+  })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", null, "Colaborador"), /*#__PURE__*/React.createElement("input", {
+    type: "text",
+    value: colabFiltro,
+    onChange: e => setColabFiltro(e.target.value),
+    onKeyDown: e => e.key === "Enter" && buscar(),
+    placeholder: "Nome ou matr\xEDcula",
+    style: {
+      width: 180
+    }
+  })), cfg.filtroAtividade && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", null, "Servi\xE7o"), /*#__PURE__*/React.createElement("select", {
+    value: ativFiltro,
+    onChange: e => setAtivFiltro(e.target.value),
+    style: {
+      padding: 9,
+      fontSize: 14,
+      border: "1px solid #ccc",
+      borderRadius: 8,
+      background: "#fff"
+    }
+  }, /*#__PURE__*/React.createElement("option", {
+    value: ""
+  }, "Todos"), SERVICOS.map(s => /*#__PURE__*/React.createElement("option", {
+    key: s,
+    value: s
+  }, s)))), /*#__PURE__*/React.createElement("button", {
     className: "btn btn-blue",
     onClick: () => buscar(),
     disabled: carregando
-  }, carregando ? "Buscando..." : "Buscar"), lista.length > 0 && /*#__PURE__*/React.createElement("button", {
+  }, carregando ? "Buscando..." : "Buscar"), /*#__PURE__*/React.createElement("button", {
+    className: "btn btn-light",
+    onClick: () => {
+      limparFiltros();
+    },
+    disabled: carregando
+  }, "Limpar filtros"), /*#__PURE__*/React.createElement("button", {
+    className: "btn btn-light",
+    onClick: baixarCSV,
+    disabled: carregando,
+    title: "Uma linha por colaborador por documento \u2014 matr\xEDcula, data, OS e servi\xE7o"
+  }, "Relat\xF3rio por colaborador (CSV)"), lista.length > 0 && /*#__PURE__*/React.createElement("button", {
     className: "btn btn-light",
     onClick: baixarTodos
   }, "Baixar todos (PDF \xFAnico)"), !verLixeira && /*#__PURE__*/React.createElement("button", {
@@ -3924,7 +4836,7 @@ function AppPTQuente({
   const [emissorArea, setEmissorArea] = useState("");
   const [verifNome, setVerifNome] = useState("");
   const [verifArea, setVerifArea] = useState("");
-  const [nomeTmp, setNomeTmp] = useState("");
+  const efetivo = useEfetivo();
   const [equipe, setEquipe] = useState([]); // {nome, rubrica}
   const [rubricaIdx, setRubricaIdx] = useState(null);
   const [toast, setToast] = useState(null);
@@ -3941,15 +4853,11 @@ function AppPTQuente({
     ...x,
     [campo]: val
   } : x));
-  const addNome = () => {
-    const v = nomeTmp.trim();
-    if (!v) return;
-    setEquipe([...equipe, {
-      nome: v,
-      rubrica: null
-    }]);
-    setNomeTmp("");
-  };
+  const addColab = c => setEquipe([...equipe, {
+    codigo: c.codigo,
+    nome: c.nome,
+    rubrica: null
+  }]);
   const setRubrica = (idx, d) => setEquipe(eq => eq.map((m, i) => i === idx ? {
     ...m,
     rubrica: d
@@ -3982,6 +4890,7 @@ function AppPTQuente({
     verifNome,
     verifArea,
     equipe: equipe.map(m => ({
+      codigo: m.codigo || null,
       nome: m.nome
     }))
   });
@@ -4007,6 +4916,7 @@ function AppPTQuente({
     setVerifNome(d.verifNome || "");
     setVerifArea(d.verifArea || "");
     setEquipe((d.equipe || []).map(m => ({
+      codigo: m.codigo || null,
       nome: m.nome,
       rubrica: null
     })));
@@ -4223,7 +5133,10 @@ function AppPTQuente({
         numero_os_base: osBase,
         cliente_id: novoIdCliente()
       };
-      const colaboradores = equipe.map(m => m.nome);
+      const colaboradores = equipe.map(m => ({
+        codigo: m.codigo || null,
+        nome: m.nome
+      }));
       const osNome = osEfetiva.replace(/[^\w.-]+/g, "_") || "sem_os";
       const baseItem = {
         id: localId,
@@ -4527,23 +5440,17 @@ function AppPTQuente({
     className: "section"
   }, /*#__PURE__*/React.createElement("h2", null, "Trabalhadores envolvidos"), /*#__PURE__*/React.createElement("p", {
     className: "hint"
-  }, "At\xE9 10. Cada um assina com rubrica."), /*#__PURE__*/React.createElement("div", {
-    className: "team-add"
-  }, /*#__PURE__*/React.createElement("input", {
-    type: "text",
-    value: nomeTmp,
-    onChange: e => setNomeTmp(e.target.value),
-    onKeyDown: e => e.key === "Enter" && addNome(),
-    placeholder: "Nome do trabalhador"
-  }), /*#__PURE__*/React.createElement("button", {
-    className: "btn btn-light",
-    onClick: addNome
-  }, "+ Add")), equipe.map((m, i) => /*#__PURE__*/React.createElement("div", {
+  }, "At\xE9 10. Cada um assina com rubrica."), /*#__PURE__*/React.createElement(SeletorColaborador, {
+    efetivo: efetivo.lista,
+    onAdd: addColab,
+    jaEscolhidos: equipe.map(m => m.codigo),
+    placeholder: "Nome ou matr\xEDcula do trabalhador"
+  }), equipe.map((m, i) => /*#__PURE__*/React.createElement("div", {
     key: i,
     className: "team-item"
-  }, /*#__PURE__*/React.createElement("span", {
-    className: "nome"
-  }, m.nome), m.rubrica ? /*#__PURE__*/React.createElement("img", {
+  }, /*#__PURE__*/React.createElement(EtiquetaColab, {
+    m: m
+  }), m.rubrica ? /*#__PURE__*/React.createElement("img", {
     src: m.rubrica,
     className: "rubrica-mini",
     alt: "rubrica",
@@ -6406,7 +7313,7 @@ function AppPT({
   const [emissorArea, setEmissorArea] = useState("");
   const [verifNome, setVerifNome] = useState("");
   const [verifArea, setVerifArea] = useState("");
-  const [nomeTmp, setNomeTmp] = useState("");
+  const efetivo = useEfetivo();
   const [equipe, setEquipe] = useState([]);
   const [rubricaIdx, setRubricaIdx] = useState(null);
   const [toast, setToast] = useState(null);
@@ -6422,18 +7329,16 @@ function AppPT({
     ...x,
     [campo]: val
   } : x));
-  const addNome = () => {
-    const v = nomeTmp.trim();
-    if (!v) return;
+  const addColab = c => {
     if (equipe.length >= 10) {
       mostraToast("Máximo 10 trabalhadores.", true);
       return;
     }
     setEquipe([...equipe, {
-      nome: v,
+      codigo: c.codigo,
+      nome: c.nome,
       rubrica: null
     }]);
-    setNomeTmp("");
   };
   const setRubrica = (idx, d) => setEquipe(eq => eq.map((m, i) => i === idx ? {
     ...m,
@@ -6472,6 +7377,7 @@ function AppPT({
     verifNome,
     verifArea,
     equipe: equipe.map(m => ({
+      codigo: m.codigo || null,
       nome: m.nome
     }))
   }); // sem rubrica
@@ -6511,6 +7417,7 @@ function AppPT({
     setVerifNome(d.verifNome || "");
     setVerifArea(d.verifArea || "");
     setEquipe((d.equipe || []).map(m => ({
+      codigo: m.codigo || null,
       nome: m.nome,
       rubrica: null
     })));
@@ -7030,7 +7937,10 @@ function AppPT({
         ...montarRegistro(osEfetiva, osBase),
         cliente_id: novoIdCliente()
       };
-      const colaboradores = equipe.map(m => m.nome);
+      const colaboradores = equipe.map(m => ({
+        codigo: m.codigo || null,
+        nome: m.nome
+      }));
       const osNome = (osEfetiva || "sem_os").replace(/[^\w.-]+/g, "_");
       const localId = "pt_" + desc.tipo + "_" + Date.now();
       const baseItem = {
@@ -8424,26 +9334,20 @@ function AppPT({
     className: "section"
   }, /*#__PURE__*/React.createElement("h2", null, "Trabalhadores envolvidos"), /*#__PURE__*/React.createElement("p", {
     className: "hint"
-  }, "At\xE9 10. Cada um assina com rubrica."), /*#__PURE__*/React.createElement("div", {
-    className: "team-add"
-  }, /*#__PURE__*/React.createElement("input", {
-    type: "text",
-    value: nomeTmp,
-    onChange: e => setNomeTmp(e.target.value),
-    onKeyDown: e => e.key === "Enter" && addNome(),
-    placeholder: "Nome do trabalhador"
-  }), /*#__PURE__*/React.createElement("button", {
-    className: "btn btn-light",
-    onClick: addNome
-  }, "+ Add")), equipe.map((m, i) => /*#__PURE__*/React.createElement("div", {
+  }, "At\xE9 10. Cada um assina com rubrica."), /*#__PURE__*/React.createElement(SeletorColaborador, {
+    efetivo: efetivo.lista,
+    onAdd: addColab,
+    jaEscolhidos: equipe.map(m => m.codigo),
+    placeholder: "Nome ou matr\xEDcula do trabalhador"
+  }), equipe.map((m, i) => /*#__PURE__*/React.createElement("div", {
     key: i,
     className: "team-item",
     style: desc.classificacaoTrab ? {
       flexWrap: "wrap"
     } : {}
-  }, /*#__PURE__*/React.createElement("span", {
-    className: "nome"
-  }, m.nome), desc.classificacaoTrab && /*#__PURE__*/React.createElement("div", {
+  }, /*#__PURE__*/React.createElement(EtiquetaColab, {
+    m: m
+  }), desc.classificacaoTrab && /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
       gap: 4,
