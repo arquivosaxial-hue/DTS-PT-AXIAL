@@ -153,7 +153,7 @@
 
   <script type="text/babel">
     const { useState, useRef, useEffect } = React;
-    const APP_VERSION = "V5";
+    const APP_VERSION = "V6";
 
     // ===== CONFIG SUPABASE =====
     const SUPABASE_URL = "https://atbkjmvogkuekrcoevkn.supabase.co";
@@ -239,6 +239,25 @@
     };
     // DTS (formato paisagem FR.026): limites por campo do cabeçalho.
     const LIMITES_DTS = {empresa:60,numeroOs:16,elaborador:83,area:59,lider:156,atividade:88,local:46};
+
+    // ===== SERVIÇOS EXECUTADOS =====
+    // Lista fechada, definida com a Axial. Texto livre não serve aqui: em ação
+    // trabalhista a pergunta é "que serviço esta pessoa executou, em que dia?", e
+    // "Reaterro", "reaterro" e "Reat." são três respostas diferentes para o banco.
+    // Não há campo "Outro" de propósito — "Serviços Gerais" é a saída para o que
+    // não se encaixa, e um campo livre reabriria justamente o problema que esta
+    // lista fecha.
+    const SERVICOS = [
+      "Reaterro",
+      "Recomposição de Calçada",
+      "Base de Concreto",
+      "Recomposição de Lajota/Paralelepípedo",
+      "Plantio de Grama",
+      "Recomposição de Asfalto Quente (CBUQ)",
+      "Recomposição de Asfalto Frio",
+      "Pintura Viária",
+      "Serviços Gerais",
+    ];
 
     function fmtData(d){ const dd=String(d.getDate()).padStart(2,"0"), mm=String(d.getMonth()+1).padStart(2,"0"); return dd+"/"+mm+"/"+d.getFullYear(); }
 
@@ -585,6 +604,117 @@
       );
     }
 
+    // ===== EFETIVO =====
+    // O encarregado não faz login, mas precisa da lista de colaboradores para
+    // montar a equipe — e precisa dela EM VALA, sem sinal. Por isso a lista mora
+    // no localStorage e a rede serve só para atualizá-la: sem sinal, vale a última
+    // baixada. Uma lista que só existisse online travaria a emissão do documento
+    // em campo, que é o cenário normal de uso, não a exceção.
+    const EFETIVO_CACHE = "axial_efetivo_v1";
+
+    function lerEfetivoCache(){
+      try{
+        const bruto = localStorage.getItem(EFETIVO_CACHE);
+        if(!bruto) return { lista:[], em:null };
+        const o = JSON.parse(bruto);
+        return { lista: Array.isArray(o.lista) ? o.lista : [], em: o.em || null };
+      }catch(_){ return { lista:[], em:null }; }
+    }
+
+    async function baixarEfetivo(){
+      const { data, error } = await supa.rpc("listar_efetivo");
+      if(error) throw error;
+      const lista = (data||[]).map(c=>({
+        codigo:String(c.codigo||""), nome:c.nome||"", funcao:c.funcao||"" }));
+      try{
+        localStorage.setItem(EFETIVO_CACHE, JSON.stringify({ lista, em:new Date().toISOString() }));
+      }catch(_){}   // aparelho com armazenamento cheio: segue com a lista em memória
+      return lista;
+    }
+
+    function useEfetivo(){
+      // começa pelo cache, de forma síncrona: a tela nunca aparece vazia esperando rede
+      const [estado,setEstado]=useState(()=>lerEfetivoCache());
+      useEffect(()=>{
+        let vivo=true;
+        (async()=>{
+          try{
+            const lista=await baixarEfetivo();
+            if(vivo) setEstado({ lista, em:new Date().toISOString() });
+          }catch(_){ /* offline: fica com o cache — que é exatamente o objetivo */ }
+        })();
+        return ()=>{ vivo=false; };
+      },[]);
+      return estado;   // {lista, em}
+    }
+
+    // Escolhe o colaborador no efetivo trazendo a MATRÍCULA junto. É a matrícula que
+    // torna o histórico consultável anos depois: nome digitado vira "João da Silva",
+    // "Joao Silva" e "J. da Silva" — três pessoas para o banco.
+    //
+    // Quem não está no efetivo (terceirizado, contratado na véspera) continua podendo
+    // ser digitado: aparece no documento e assina normalmente, mas entra sem matrícula
+    // — e a tela diz isso, em vez de deixar o encarregado achar que ficou rastreável.
+    function SeletorColaborador({ efetivo, jaEscolhidos, onAdd, placeholder }){
+      const [busca,setBusca]=useState("");
+      const q=busca.trim().toLowerCase();
+      const escolhidos=new Set((jaEscolhidos||[]).filter(Boolean));
+      const achados = !q ? [] : (efetivo||[])
+        .filter(c=>!escolhidos.has(c.codigo))
+        .filter(c=>c.nome.toLowerCase().includes(q) || c.codigo.toLowerCase().includes(q))
+        .slice(0,8);
+      const escolher=(c)=>{ onAdd({codigo:c.codigo, nome:c.nome}); setBusca(""); };
+      const digitar=()=>{ const v=busca.trim(); if(!v) return; onAdd({codigo:null, nome:v}); setBusca(""); };
+      return (
+        <div>
+          <div className="team-add">
+            <input type="text" value={busca} onChange={e=>setBusca(e.target.value)}
+              onKeyDown={e=>{ if(e.key!=="Enter") return; e.preventDefault();
+                              if(achados.length===1) escolher(achados[0]); else digitar(); }}
+              placeholder={placeholder||"Nome ou matrícula"} />
+            <button className="btn btn-light" onClick={digitar} disabled={!busca.trim()}>+ Add</button>
+          </div>
+          {achados.length>0 && (
+            <div style={{border:"1px solid #ddd",borderRadius:8,marginTop:6,overflow:"hidden"}}>
+              {achados.map(c=>(
+                <div key={c.codigo} onClick={()=>escolher(c)}
+                  style={{padding:"9px 11px",borderBottom:"1px solid #f0f0f0",cursor:"pointer",fontSize:14}}>
+                  <b>{c.nome}</b>
+                  <span style={{color:"#888",fontSize:12}}> · {c.codigo}{c.funcao?" · "+c.funcao:""}</span>
+                </div>
+              ))}
+            </div>
+          )}
+          {q && !achados.length && (
+            <p style={{fontSize:12,color:"#7A5510",background:"#FFF6E5",border:"1px solid #E7C77A",
+                       borderRadius:8,padding:"8px 10px",margin:"6px 0 0"}}>
+              Ninguém no efetivo com "{busca.trim()}". Se adicionar assim, entra <b>sem matrícula</b>
+              e não aparecerá na busca por colaborador do painel.
+            </p>
+          )}
+          {!(efetivo||[]).length && (
+            <p style={{fontSize:12,color:"#999",margin:"6px 0 0"}}>
+              O efetivo ainda não foi baixado neste aparelho. Abra o app uma vez com sinal
+              para carregar a lista; depois ela funciona offline.
+            </p>
+          )}
+        </div>
+      );
+    }
+
+    // Linha da equipe já montada. A matrícula aparece do lado do nome porque é ela
+    // que o painel vai buscar depois — quem preenche precisa ver se ficou lá.
+    function EtiquetaColab({ m }){
+      return (
+        <span className="nome">
+          {m.nome}
+          {m.codigo
+            ? <span style={{color:"#888",fontSize:11}}> · {m.codigo}</span>
+            : <span style={{color:"#B07A16",fontSize:11}}> · sem matrícula</span>}
+        </span>
+      );
+    }
+
     // --- Canvas de rubrica ---
     function RubricaModal({ onClose, onSave }) {
       const canvasRef = useRef(null);
@@ -642,7 +772,7 @@
       const [outros,setOutros]=useState({});
       const setOutro=(k,v)=>setOutros(o=>({...o,[k]:v}));
 
-      const [nomeTmp,setNomeTmp]=useState("");
+      const efetivo=useEfetivo();
       const [equipe,setEquipe]=useState([]); // [{nome, rubrica}]
       const [rubricaIdx,setRubricaIdx]=useState(null);
 
@@ -681,7 +811,7 @@
       const instantaneo=()=>({ numeroOs, elaborador, lider, area, atividade, local,
         tipoEquipe, empresa, empresaOutra, criticas, etapasSel, riscoSel,
         etapasOutras, riscosManuais, epis, outros,
-        equipe: equipe.map(m=>({nome:m.nome})) });
+        equipe: equipe.map(m=>({codigo:m.codigo||null, nome:m.nome})) });
       const [rascunho,setRascunho]=useRascunho("dts", instantaneo,
         [numeroOs,elaborador,lider,area,atividade,local,tipoEquipe,empresa,empresaOutra,
          criticas,etapasSel,riscoSel,etapasOutras,riscosManuais,epis,outros,equipe]);
@@ -721,7 +851,7 @@
         setEtapasOutras(d.etapasOutras||[]); setRiscosManuais(d.riscosManuais||{});
         setEpis(d.epis||[]); setOutros(d.outros||{});
         // equipe volta com os nomes, mas SEM rubrica (cada um precisa rubricar de novo)
-        setEquipe((d.equipe||[]).map(m=>({nome:m.nome, rubrica:null})));
+        setEquipe((d.equipe||[]).map(m=>({codigo:m.codigo||null, nome:m.nome, rubrica:null})));
         window.scrollTo(0,0);
       };
 
@@ -750,7 +880,7 @@
       const updRiscoManual=(eid,idx,campo,val)=> setRiscosManuais(m=>({...m,[eid]:(m[eid]||[]).map((x,i)=>i===idx?{...x,[campo]:val}:x)}));
       const delRiscoManual=(eid,idx)=> setRiscosManuais(m=>({...m,[eid]:(m[eid]||[]).filter((_,i)=>i!==idx)}));
 
-      const addNome=()=>{ const v=nomeTmp.trim(); if(!v)return; setEquipe([...equipe,{nome:v,rubrica:null}]); setNomeTmp(""); };
+      const addColab=(c)=>setEquipe([...equipe,{codigo:c.codigo,nome:c.nome,rubrica:null}]);
       const setRubrica=(idx,dataUrl)=> setEquipe(eq=>eq.map((m,i)=>i===idx?{...m,rubrica:dataUrl}:m));
 
       // monta as linhas da tabela (1 risco = 1 linha)
@@ -979,6 +1109,10 @@
       async function salvarEGerar(){
         // validação: campos obrigatórios
         if(!numeroOs.trim()){ mostraToast("Preencha o Nº da O.S.",true); return; }
+        // Sem serviço escolhido não há o que rastrear depois — e o campo agora é uma
+        // lista fechada, então "não achei o meu" não é motivo para deixar em branco:
+        // "Serviços Gerais" está lá para isso.
+        if(!atividade){ mostraToast("Selecione o serviço executado.",true); return; }
         if(tipoEquipe==="contratada" && !empresaEfetiva.trim()){ mostraToast("Informe o nome da empresa contratada.",true); return; }
         if(!local.trim()){ mostraToast("Preencha a Localização do trabalho (endereço).",true); return; }
         if(!equipe.length){ mostraToast("Adicione pelo menos um colaborador na equipe.",true); return; }
@@ -1027,14 +1161,14 @@
           // é ele que impede uma segunda cópia quando a resposta do envio se perde
           const registro={...montarRegistro(), numero_os:osEfetiva, numero_os_base:osBase,
             cliente_id:novoIdCliente()};
-          const colaboradores=equipe.map(m=>m.nome);
+          const colaboradores=equipe.map(m=>({codigo:m.codigo||null, nome:m.nome}));
           const osNome=osEfetiva.replace(/[^\w.-]+/g,"_")||"sem_os";
 
           // 3) guarda cópia local "DTSs de hoje"
           const dados={ numeroOs, elaborador, lider, area, atividade, local,
             tipoEquipe, empresa, empresaOutra,
             criticas, etapasSel, riscoSel, etapasOutras, riscosManuais, epis, outros,
-            equipe: colaboradores.map(nome=>({nome})) };
+            equipe: colaboradores };
           await salvarLocal({ id:localId, tipo:"dts", nome:"DTS_"+osNome+".pdf", data:fmtData(agora.current),
             dataISO:new Date().toISOString(), atividade, bytes, dados });
           setRecentes(await listarDTSLocal());
@@ -1124,7 +1258,11 @@
             <div><label>Área / Setor</label><input type="text" maxLength={LIMITES_DTS.area} value={area} onChange={e=>setArea(e.target.value)} /></div>
           </div>
           <label>Atividade a ser executada</label>
-          <input type="text" maxLength={LIMITES_DTS.atividade} value={atividade} onChange={e=>setAtividade(e.target.value)} placeholder="Descreva a atividade do dia" />
+          <select value={atividade} onChange={e=>setAtividade(e.target.value)}
+            style={{width:"100%",padding:11,fontSize:15,border:"1px solid #ccc",borderRadius:8,background:"#fff"}}>
+            <option value="">Selecione o serviço…</option>
+            {SERVICOS.map(s=><option key={s} value={s}>{s}</option>)}
+          </select>
           <label>Localização do trabalho</label>
           <input type="text" maxLength={LIMITES_DTS.local} value={local} onChange={e=>setLocal(e.target.value)} placeholder="Endereço / trecho" />
           <label>Elaborador da DTS</label>
@@ -1245,13 +1383,11 @@
 
         <div className="section">
           <h2>Equipe (colaboradores)</h2>
-          <div className="team-add">
-            <input type="text" value={nomeTmp} onChange={e=>setNomeTmp(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addNome()} placeholder="Nome do colaborador" />
-            <button className="btn btn-light" onClick={addNome}>+ Add</button>
-          </div>
+          <SeletorColaborador efetivo={efetivo.lista} onAdd={addColab}
+            jaEscolhidos={equipe.map(m=>m.codigo)} placeholder="Nome ou matrícula do colaborador" />
           {equipe.map((m,i)=>(
             <div key={i} className="team-item">
-              <span className="nome">{m.nome}</span>
+              <EtiquetaColab m={m} />
               {m.rubrica
                 ? <img src={m.rubrica} className="rubrica-mini" alt="rubrica" onClick={()=>setRubricaIdx(i)} />
                 : <button className="btn btn-light" style={{fontSize:12,padding:"6px 10px"}} onClick={()=>setRubricaIdx(i)}>Rubricar</button>}
@@ -1306,6 +1442,7 @@
     // barreira de Controle mostrado na listagem do aprovador.
     const CFG_DTS={ tabela:"dts", colab:"dts_colaborador", fk:"dts_id", rotulo:"DTS", prefixo:"DTS",
       colTitulo:"atividade", colLocal:"localizacao", colLider:"lider_frente", alertaRisco:true,
+      filtroAtividade:true,   // só a DTS tem a coluna 'atividade' com a lista fechada
       select:"id,created_at,numero_os,atividade,localizacao,lider_frente,pdf_path,data_atividade,riscos,excluido_em" };
     // As tabelas pt_quente / pt_quente_colaborador são anteriores à unificação em 'pt'.
     // Nenhuma tela usa mais, e o acesso anônimo a elas foi fechado no banco em 15/08/2026.
@@ -1326,6 +1463,331 @@
       return riscos
         .filter(r => r && (r.alerta_sem_controle === true || (r.nivel==="A" && !String(r.controle||"").trim())))
         .map(r => r.nome || r.passo || "(risco sem nome)");
+    }
+
+    // ===== IMPORTAÇÃO DO EFETIVO =====
+    // Lê CSV, não .xlsx. É uma decisão, não uma limitação: um leitor de xlsx é uma
+    // biblioteca nova de ~900 KB no app inteiro, com versão para fixar e hash SRI
+    // para manter, só para uma tela que o administrador usa uma vez por mês. No
+    // Excel: Arquivo → Salvar como → "CSV UTF-8 (delimitado por vírgulas)".
+    function separadorDe(linha){
+      // Excel em pt-BR grava com ponto-e-vírgula; o "CSV UTF-8" grava com vírgula.
+      const c = (linha.match(/,/g)||[]).length, pv = (linha.match(/;/g)||[]).length;
+      const tab = (linha.match(/\t/g)||[]).length;   // colado direto da planilha
+      if(tab >= c && tab >= pv && tab > 0) return "\t";
+      return pv > c ? ";" : ",";
+    }
+
+    function lerLinhaCSV(linha, sep){
+      const campos=[]; let atual=""; let aspas=false;
+      for(let i=0;i<linha.length;i++){
+        const ch=linha[i];
+        if(aspas){
+          if(ch==='"'){ if(linha[i+1]==='"'){ atual+='"'; i++; } else aspas=false; }
+          else atual+=ch;
+        } else if(ch==='"') aspas=true;
+        else if(ch===sep){ campos.push(atual); atual=""; }
+        else atual+=ch;
+      }
+      campos.push(atual);
+      return campos.map(c=>c.trim());
+    }
+
+    // Aceita os cabeçalhos como saem da planilha do RH, com ou sem acento.
+    function acharColuna(cabecalho, nomes){
+      const norm = s => String(s||"").toLowerCase()
+        .normalize("NFD").replace(/[\u0300-\u036f]/g,"").trim();
+      for(const nome of nomes){
+        const i = cabecalho.findIndex(h => norm(h) === norm(nome));
+        if(i >= 0) return i;
+      }
+      return -1;
+    }
+
+    function lerPlanilhaEfetivo(texto){
+      const linhas = String(texto||"").replace(/\r/g,"").split("\n").filter(l=>l.trim());
+      if(linhas.length < 2) return { erro:"A planilha precisa do cabeçalho e ao menos uma linha." };
+      const sep = separadorDe(linhas[0]);
+      const cab = lerLinhaCSV(linhas[0], sep);
+      const iCod = acharColuna(cab, ["Código","Codigo","Matrícula","Matricula"]);
+      const iNom = acharColuna(cab, ["Nome","Colaborador"]);
+      const iFun = acharColuna(cab, ["Função","Funcao","Cargo"]);
+      const iSit = acharColuna(cab, ["Situação","Situacao","Status"]);
+      if(iCod < 0 || iNom < 0)
+        return { erro:"Não achei as colunas \"Código\" e \"Nome\" no cabeçalho. Encontrei: "+cab.join(" | ") };
+
+      const ok=[], ruins=[];
+      const vistos=new Set();
+      for(let i=1;i<linhas.length;i++){
+        const c = lerLinhaCSV(linhas[i], sep);
+        // Matrícula é TEXTO: '001104' com zeros à esquerda. Se o Excel tiver comido
+        // os zeros, o vínculo com a planilha do RH quebra — e não há como adivinhar.
+        const codigo = (c[iCod]||"").replace(/^'/,"").trim();
+        const nome   = (c[iNom]||"").trim();
+        if(!codigo && !nome) continue;
+        if(!codigo || !nome){ ruins.push({ linha:i+1, motivo:"código ou nome em branco" }); continue; }
+        if(vistos.has(codigo)){ ruins.push({ linha:i+1, motivo:"código "+codigo+" repetido na planilha" }); continue; }
+        vistos.add(codigo);
+        const sitBruta = (iSit>=0 ? (c[iSit]||"") : "").toLowerCase();
+        const situacao = /desligad|demitid|inativ/.test(sitBruta) ? "desligado"
+                       : /afastad|licen/.test(sitBruta) ? "afastado" : "ativo";
+        ok.push({ codigo, nome, funcao: iFun>=0 ? (c[iFun]||"").trim() : "", situacao });
+      }
+      return { linhas:ok, ruins };
+    }
+
+    // ===== EFETIVO — tela do administrador =====
+    // Fica dentro do painel de propósito: já há sessão autenticada aqui, e o efetivo
+    // é dado pessoal de trabalhador (LGPD). Uma tela separada exigiria repetir o
+    // login — e login repetido é login mal feito.
+    //
+    // Ninguém é APAGADO desta tabela. Quem processa a empresa costuma ser
+    // ex-funcionário, e é justamente o histórico dele que a defesa precisa. Quem sai
+    // vira "desligado": some do formulário em campo, continua no banco e nos filtros.
+    function TelaEfetivo({ onVoltar }){
+      const [lista,setLista]=useState([]);
+      const [carregando,setCarregando]=useState(false);
+      const [msg,setMsg]=useState("");
+      const [erro,setErro]=useState("");
+      const [busca,setBusca]=useState("");
+      const [novo,setNovo]=useState({codigo:"",nome:"",funcao:""});
+      const [texto,setTexto]=useState("");          // planilha colada
+      const [previa,setPrevia]=useState(null);      // {linhas, ruins}
+      const [desligarAusentes,setDesligarAusentes]=useState(true);
+      const arquivoRef=React.useRef(null);
+
+      async function carregar(){
+        setCarregando(true); setErro("");
+        try{
+          const { data, error }=await supa.from("colaboradores")
+            .select("codigo,nome,funcao,situacao,atualizado_em").order("nome");
+          if(error) throw error;
+          setLista(data||[]);
+        }catch(e){ setErro("Não foi possível carregar o efetivo: "+e.message); }
+        finally{ setCarregando(false); }
+      }
+      useEffect(()=>{ carregar(); },[]);
+
+      const filtrada = (()=>{
+        const q=busca.trim().toLowerCase();
+        if(!q) return lista;
+        return lista.filter(c=>
+          String(c.nome||"").toLowerCase().includes(q) ||
+          String(c.codigo||"").toLowerCase().includes(q) ||
+          String(c.funcao||"").toLowerCase().includes(q));
+      })();
+
+      const ativos = lista.filter(c=>c.situacao==="ativo").length;
+
+      async function salvarUm(){
+        const codigo=novo.codigo.trim(), nome=novo.nome.trim();
+        if(!codigo || !nome){ setErro("Matrícula e nome são obrigatórios."); return; }
+        setCarregando(true); setErro(""); setMsg("");
+        try{
+          const { error }=await supa.from("colaboradores").upsert({
+            codigo, nome, funcao:novo.funcao.trim()||null,
+            situacao:"ativo", atualizado_em:new Date().toISOString() }, { onConflict:"codigo" });
+          if(error) throw error;
+          setNovo({codigo:"",nome:"",funcao:""});
+          setMsg(nome+" salvo.");
+          await carregar();
+        }catch(e){ setErro("Erro ao salvar: "+e.message); }
+        finally{ setCarregando(false); }
+      }
+
+      async function mudarSituacao(c, situacao){
+        setCarregando(true); setErro(""); setMsg("");
+        try{
+          const { error }=await supa.from("colaboradores")
+            .update({ situacao, atualizado_em:new Date().toISOString() }).eq("codigo", c.codigo);
+          if(error) throw error;
+          setLista(l=>l.map(x=>x.codigo===c.codigo?{...x,situacao}:x));
+          setMsg(c.nome+" agora está "+situacao+".");
+        }catch(e){ setErro("Erro ao alterar: "+e.message); }
+        finally{ setCarregando(false); }
+      }
+
+      function analisar(bruto){
+        setErro(""); setMsg("");
+        const r=lerPlanilhaEfetivo(bruto);
+        if(r.erro){ setPrevia(null); setErro(r.erro); return; }
+        if(!r.linhas.length){ setPrevia(null); setErro("Nenhuma linha aproveitável na planilha."); return; }
+        setPrevia(r);
+      }
+
+      function escolherArquivo(e){
+        const f=e.target.files && e.target.files[0];
+        if(!f) return;
+        const leitor=new FileReader();
+        leitor.onload=()=>{ setTexto(String(leitor.result||"")); analisar(leitor.result); };
+        // planilha do RH quase sempre sai em UTF-8; se vier em ANSI, os acentos
+        // aparecem errados na prévia — e é para isso que a prévia existe
+        leitor.readAsText(f, "utf-8");
+        e.target.value="";
+      }
+
+      async function confirmarImportacao(){
+        if(!previa) return;
+        const novos=previa.linhas;
+        const naPlanilha=new Set(novos.map(c=>c.codigo));
+        const somem=desligarAusentes
+          ? lista.filter(c=>c.situacao==="ativo" && !naPlanilha.has(c.codigo))
+          : [];
+        const conf=window.confirm(
+          "Importar "+novos.length+" colaborador(es)?\n\n"
+          +(somem.length ? somem.length+" pessoa(s) que estão ativas mas não aparecem na planilha "
+              +"serão marcadas como DESLIGADAS.\n\n" : "")
+          +"Ninguém é apagado: o histórico de documentos continua intacto.");
+        if(!conf) return;
+        setCarregando(true); setErro(""); setMsg("");
+        try{
+          const agora=new Date().toISOString();
+          for(let i=0;i<novos.length;i+=200){
+            const fatia=novos.slice(i,i+200).map(c=>({
+              codigo:c.codigo, nome:c.nome, funcao:c.funcao||null,
+              situacao:c.situacao, atualizado_em:agora }));
+            const { error }=await supa.from("colaboradores").upsert(fatia,{ onConflict:"codigo" });
+            if(error) throw error;
+          }
+          if(somem.length){
+            const codigos=somem.map(c=>c.codigo);
+            for(let i=0;i<codigos.length;i+=200){
+              const { error }=await supa.from("colaboradores")
+                .update({ situacao:"desligado", atualizado_em:agora })
+                .in("codigo", codigos.slice(i,i+200));
+              if(error) throw error;
+            }
+          }
+          setPrevia(null); setTexto("");
+          setMsg(novos.length+" colaborador(es) importados."
+            +(somem.length?" "+somem.length+" marcados como desligados.":""));
+          await carregar();
+          // o aparelho de quem importou também precisa da lista nova
+          try{ await baixarEfetivo(); }catch(_){}
+        }catch(e){ setErro("Erro na importação: "+e.message); }
+        finally{ setCarregando(false); }
+      }
+
+      const cor={ativo:"#2E7D32",afastado:"#BA7517",desligado:"#A32D2D"};
+
+      return (<div style={{maxWidth:760,margin:"0 auto",padding:16,background:"#fff",minHeight:"100vh"}}>
+        <div className="header" style={{borderRadius:10}}>
+          <h1>Efetivo</h1>
+          <p>{lista.length} cadastrado(s) · {ativos} ativo(s)</p>
+        </div>
+
+        <p style={{fontSize:12.5,color:"#666",lineHeight:1.5,margin:"14px 0"}}>
+          Esta é a lista que aparece no formulário em campo. Só quem está <b>ativo</b> é
+          oferecido ao encarregado — mas <b>ninguém some do histórico</b>: um colaborador
+          desligado continua ligado a todas as DTS e PT que assinou.
+        </p>
+
+        {erro && <p style={{color:"#A32D2D",fontSize:13,background:"#FDEDED",border:"1px solid #F0C2C2",
+                            borderRadius:8,padding:"9px 11px"}}>{erro}</p>}
+        {msg && <p style={{color:"#2E7D32",fontSize:13}}>{msg}</p>}
+
+        {/* ---------------- importar planilha ---------------- */}
+        <div className="section">
+          <h2>Importar planilha</h2>
+          <p className="hint">
+            No Excel: <b>Arquivo → Salvar como → CSV UTF-8</b>. Precisa ter as colunas
+            <b> Código</b> e <b> Nome</b>; <b>Função</b> e <b>Situação</b> entram se existirem.
+            Também dá para copiar as células e colar no campo abaixo.
+          </p>
+          <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center",margin:"8px 0"}}>
+            <input ref={arquivoRef} type="file" accept=".csv,.txt,text/csv,text/plain"
+              onChange={escolherArquivo} style={{fontSize:13}} />
+          </div>
+          <textarea value={texto} onChange={e=>setTexto(e.target.value)}
+            placeholder={"Código;Nome;Função;Situação\n001104;Anderson de Souza;Pedreiro;Ativo"}
+            style={{width:"100%",minHeight:90,padding:10,fontSize:13,fontFamily:"monospace",
+                    border:"1px solid #ccc",borderRadius:8,boxSizing:"border-box"}} />
+          <div style={{display:"flex",gap:8,marginTop:8,flexWrap:"wrap"}}>
+            <button className="btn btn-light" disabled={!texto.trim()} onClick={()=>analisar(texto)}>Conferir</button>
+            {previa && <button className="btn btn-blue" disabled={carregando} onClick={confirmarImportacao}>
+              {carregando?"Importando…":"Importar "+previa.linhas.length}</button>}
+            {previa && <button className="btn btn-light" onClick={()=>{ setPrevia(null); setTexto(""); }}>Cancelar</button>}
+          </div>
+
+          {previa && (
+            <div style={{border:"1px solid #dbe6f2",background:"#f7fafd",borderRadius:10,
+                         padding:"12px 14px",marginTop:12}}>
+              <p style={{margin:"0 0 8px",fontSize:13,color:"#0C447C"}}>
+                <b>{previa.linhas.length} linha(s) lidas.</b> Confira os acentos e os zeros à
+                esquerda da matrícula antes de importar.
+              </p>
+              <label style={{fontSize:13,display:"flex",alignItems:"center",gap:8,margin:"0 0 10px",color:"#333"}}>
+                <input type="checkbox" checked={desligarAusentes}
+                  onChange={e=>setDesligarAusentes(e.target.checked)} />
+                Marcar como desligado quem está ativo mas não aparece nesta planilha
+              </label>
+              <div style={{maxHeight:180,overflowY:"auto",fontSize:12,fontFamily:"monospace",color:"#444"}}>
+                {previa.linhas.slice(0,50).map(c=>(
+                  <div key={c.codigo}>{c.codigo} · {c.nome}{c.funcao?" · "+c.funcao:""}{c.situacao!=="ativo"?" · "+c.situacao:""}</div>
+                ))}
+                {previa.linhas.length>50 && <div style={{color:"#999"}}>… e mais {previa.linhas.length-50}</div>}
+              </div>
+              {previa.ruins && previa.ruins.length>0 && (
+                <p style={{fontSize:12,color:"#7A5510",background:"#FFF6E5",border:"1px solid #E7C77A",
+                           borderRadius:8,padding:"8px 10px",margin:"10px 0 0"}}>
+                  {previa.ruins.length} linha(s) ignoradas: {previa.ruins.slice(0,5).map(r=>"linha "+r.linha+" ("+r.motivo+")").join("; ")}
+                  {previa.ruins.length>5?"…":""}
+                </p>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* ---------------- cadastrar um ---------------- */}
+        <div className="section">
+          <h2>Cadastrar um colaborador</h2>
+          <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"flex-end"}}>
+            <div><label>Matrícula</label>
+              <input type="text" value={novo.codigo} onChange={e=>setNovo({...novo,codigo:e.target.value})}
+                placeholder="001104" style={{width:110}} /></div>
+            <div style={{flex:1,minWidth:180}}><label>Nome</label>
+              <input type="text" value={novo.nome} onChange={e=>setNovo({...novo,nome:e.target.value})} /></div>
+            <div><label>Função</label>
+              <input type="text" value={novo.funcao} onChange={e=>setNovo({...novo,funcao:e.target.value})}
+                placeholder="Pedreiro" style={{width:150}} /></div>
+            <button className="btn btn-blue" disabled={carregando} onClick={salvarUm}>Salvar</button>
+          </div>
+          <p className="hint" style={{marginTop:6}}>
+            Matrícula que já existe é atualizada, não duplicada.
+          </p>
+        </div>
+
+        {/* ---------------- lista ---------------- */}
+        <div className="section">
+          <h2>Cadastrados</h2>
+          <input type="text" value={busca} onChange={e=>setBusca(e.target.value)}
+            placeholder="Buscar por nome, matrícula ou função" />
+          <div style={{marginTop:10}}>
+            {carregando && !lista.length && <p style={{color:"#888",fontSize:13}}>Carregando…</p>}
+            {!carregando && !filtrada.length && <p style={{color:"#888",fontSize:13}}>Ninguém encontrado.</p>}
+            {filtrada.map(c=>(
+              <div key={c.codigo} style={{display:"flex",alignItems:"center",gap:10,padding:"9px 0",
+                                          borderBottom:"1px solid #f0f0f0",flexWrap:"wrap"}}>
+                <span style={{flex:1,minWidth:170,fontSize:14}}>
+                  {c.nome}
+                  <span style={{color:"#888",fontSize:11}}> · {c.codigo}{c.funcao?" · "+c.funcao:""}</span>
+                </span>
+                <span style={{fontSize:11,fontWeight:600,color:cor[c.situacao]||"#666"}}>{c.situacao}</span>
+                <select value={c.situacao} onChange={e=>mudarSituacao(c, e.target.value)} disabled={carregando}
+                  style={{padding:"5px 7px",fontSize:12,border:"1px solid #ccc",borderRadius:6,background:"#fff"}}>
+                  <option value="ativo">ativo</option>
+                  <option value="afastado">afastado</option>
+                  <option value="desligado">desligado</option>
+                </select>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="footer-actions">
+          <button className="btn btn-light" onClick={onVoltar}>← Voltar ao painel</button>
+        </div>
+      </div>);
     }
 
     function PainelAdm({ onVoltar, cfg=CFG_DTS }) {
@@ -1484,6 +1946,12 @@
       const [de,setDe]=useState("");
       const [ate,setAte]=useState("");
       const [tipoFiltro,setTipoFiltro]=useState("");
+      // Filtros que existem por causa das ações trabalhistas: a pergunta que chega
+      // é sempre "o que o colaborador X fez, na OS Y, no serviço Z".
+      const [osFiltro,setOsFiltro]=useState("");
+      const [colabFiltro,setColabFiltro]=useState("");
+      const [ativFiltro,setAtivFiltro]=useState("");
+      const [verEfetivo,setVerEfetivo]=useState(false);
       const [lista,setLista]=useState([]);
       const [carregando,setCarregando]=useState(false);
       const [prog,setProg]=useState(null);   // {feitos,total,restante} do "Baixar todos"
@@ -1552,19 +2020,106 @@
         finally{ setLimpando(false); }
       }
 
+      // Um só lugar decide o que os filtros fazem — a listagem, o CSV e o envio à
+      // lixeira usam os TRÊS o mesmo. Antes o "enviar período à lixeira" ignorava
+      // filtros que a tela mostrava, e apagava mais do que estava na frente de quem
+      // clicou. Aqui isso não pode voltar a acontecer por descuido.
+      function selecaoComFiltros(){
+        // o filtro por pessoa exige juntar a tabela de colaboradores: !inner devolve
+        // só os documentos que têm alguém batendo com a busca
+        return colabFiltro.trim()
+          ? cfg.select+","+cfg.colab+"!inner(codigo,nome)"
+          : cfg.select;
+      }
+
+      function aplicarFiltros(q){
+        if(de) q=q.gte("data_atividade",de);
+        if(ate) q=q.lte("data_atividade",ate);
+        if(cfg.filtroTipo && tipoFiltro) q=q.eq("tipo",tipoFiltro);
+        // OS parcial: a revisão vira sufixo (" Rev.01"), então igualdade não serve
+        if(osFiltro.trim()) q=q.ilike("numero_os","%"+osFiltro.trim()+"%");
+        if(cfg.filtroAtividade && ativFiltro) q=q.eq("atividade",ativFiltro);
+        const alvo=colabFiltro.trim();
+        if(alvo){
+          // só dígitos = matrícula; qualquer outra coisa = nome
+          q = /^[0-9]+$/.test(alvo)
+            ? q.ilike(cfg.colab+".codigo","%"+alvo+"%")
+            : q.ilike(cfg.colab+".nome","%"+alvo+"%");
+        }
+        return q;
+      }
+
+      function resumoFiltros(){
+        const partes=[];
+        if(de||ate) partes.push("período "+(de||"início")+" a "+(ate||"hoje"));
+        if(cfg.filtroTipo && tipoFiltro) partes.push("tipo "+tipoFiltro);
+        if(osFiltro.trim()) partes.push("OS contendo \""+osFiltro.trim()+"\"");
+        if(cfg.filtroAtividade && ativFiltro) partes.push("serviço \""+ativFiltro+"\"");
+        if(colabFiltro.trim()) partes.push("colaborador \""+colabFiltro.trim()+"\"");
+        return partes.length ? partes.join(", ") : "sem filtro nenhum";
+      }
+
+      function limparFiltros(){
+        setDe(""); setAte(""); setTipoFiltro("");
+        setOsFiltro(""); setColabFiltro(""); setAtivFiltro("");
+      }
+
+      // ---- RELATÓRIO POR COLABORADOR (CSV) ----
+      // O artefato que a defesa trabalhista pede: uma linha por pessoa por documento,
+      // com matrícula, data, OS e serviço. Sai do mesmo filtro que está na tela.
+      async function baixarCSV(){
+        setCarregando(true); setMsg("");
+        try{
+          const montar=()=>{
+            // aqui a junção é sempre necessária: o CSV é POR pessoa
+            const sel=cfg.select+","+cfg.colab+(colabFiltro.trim()?"!inner":"")+"(codigo,nome,ordem)";
+            // 'id' entra como desempate: a paginação de 1000 em 1000 precisa de uma
+            // ordem estável, e num só dia há dezenas de documentos com a mesma data —
+            // sem desempate, o banco pode devolver a mesma linha duas vezes e pular outra.
+            let q=supa.from(cfg.tabela).select(sel).is("excluido_em",null)
+                      .order("data_atividade",{ascending:true}).order("id",{ascending:true});
+            return aplicarFiltros(q);
+          };
+          const docs=await buscarTudo(montar);
+          if(!docs || !docs.length){ setMsg("Nada a exportar com os filtros atuais."); return; }
+          const esc=v=>'"'+String(v==null?"":v).replace(/"/g,'""')+'"';
+          const cab=["Matricula","Colaborador","Data","OS","Documento","Servico","Local","Lider"];
+          const linhas=[cab.map(esc).join(";")];
+          let semNinguem=0;
+          for(const d of docs){
+            const equipe=(d[cfg.colab]||[]).slice().sort((a,b)=>(a.ordem||0)-(b.ordem||0));
+            if(!equipe.length){ semNinguem++; continue; }
+            for(const c of equipe){
+              linhas.push([
+                c.codigo||"", c.nome||"",
+                d.data_atividade||(d.created_at||"").slice(0,10),
+                d.numero_os||"", cfg.rotulo+(d.tipo?" "+d.tipo:""),
+                d[cfg.colTitulo]||"", d[cfg.colLocal]||"", d[cfg.colLider]||"",
+              ].map(esc).join(";"));
+            }
+          }
+          // BOM: sem ele o Excel abre "João" como "JoÃ£o"
+          const blob=new Blob(["\ufeff"+linhas.join("\r\n")],{type:"text/csv;charset=utf-8"});
+          const url=URL.createObjectURL(blob);
+          const a=document.createElement("a"); a.href=url;
+          a.download="relatorio_"+cfg.prefixo.toLowerCase()+"_"+diaLocal()+".csv";
+          document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
+          setMsg((linhas.length-1)+" linha(s) exportadas de "+docs.length+" documento(s)."
+            +(semNinguem?" "+semNinguem+" documento(s) sem equipe registrada ficaram de fora.":""));
+        }catch(e){ setMsg("Erro ao gerar o relatório: "+e.message); }
+        finally{ setCarregando(false); }
+      }
+
       async function buscar(lixeira){
         const naLixeira = (lixeira===undefined) ? verLixeira : lixeira;
         setCarregando(true); setMsg("");
         try{
           const montar=()=>{
-            let q=supa.from(cfg.tabela).select(cfg.select);
+            let q=supa.from(cfg.tabela).select(selecaoComFiltros());
             // a lixeira é o mesmo registro com excluido_em preenchido
             q = naLixeira ? q.not("excluido_em","is",null) : q.is("excluido_em",null);
             q = q.order("created_at",{ascending:false});
-            if(de) q=q.gte("data_atividade",de);
-            if(ate) q=q.lte("data_atividade",ate);
-            if(cfg.filtroTipo && tipoFiltro) q=q.eq("tipo",tipoFiltro);
-            return q;
+            return aplicarFiltros(q);
           };
           const data=await buscarTudo(montar);            // paginado: sem limite de 1000
           setLista(data||[]);
@@ -1661,17 +2216,18 @@
           ? ((cfg.tipos||[]).find(t=>t[0]===tipoFiltro)||["",tipoFiltro])[1]
           : null;
         const alvoTxt = rotuloTipo ? (cfg.rotulo+" do tipo \""+rotuloTipo+"\"") : ("TODOS os registros de "+cfg.rotulo);
-        const conf = window.confirm("Enviar para a LIXEIRA:\n\n"+alvoTxt+"\nde "+de+" até "+ate+".\n\nOs registros saem das listagens, mas podem ser restaurados depois. Os PDFs são mantidos.");
+        const conf = window.confirm("Enviar para a LIXEIRA:\n\n"+alvoTxt+"\nde "+de+" até "+ate
+          +"\n\nFiltros em vigor: "+resumoFiltros()
+          +"\n\nOs registros saem das listagens, mas podem ser restaurados depois. Os PDFs são mantidos.");
           if(!conf) return;
         setCarregando(true); setMsg("");
         try{
           // 1) busca os alvos do período — PAGINADO e com os MESMOS filtros da tela
           const montar=()=>{
-            let q=supa.from(cfg.tabela).select("id").is("excluido_em",null);
-            if(de) q=q.gte("data_atividade",de);
-            if(ate) q=q.lte("data_atividade",ate);
-            if(cfg.filtroTipo && tipoFiltro) q=q.eq("tipo",tipoFiltro);   // <-- filtro de tipo agora é respeitado
-            return q;
+            // MESMOS filtros da listagem: o que se apaga é o que se está vendo
+            const sel = colabFiltro.trim() ? "id,"+cfg.colab+"!inner(codigo,nome)" : "id";
+            let q=supa.from(cfg.tabela).select(sel).is("excluido_em",null);
+            return aplicarFiltros(q);
           };
           const alvos=await buscarTudo(montar);
           if(!alvos || !alvos.length){ setMsg("Nenhum registro no período para enviar à lixeira."); setCarregando(false); return; }
@@ -1760,6 +2316,8 @@
         </div>);
       }
 
+      if(verEfetivo) return <TelaEfetivo onVoltar={()=>setVerEfetivo(false)} />;
+
       return (<div style={{maxWidth:760,margin:"0 auto",padding:16,background:"#fff",minHeight:"100vh"}}>
         <div className="header" style={{borderRadius:10}}>
           <h1>Painel administrativo — {cfg.rotulo}</h1>
@@ -1768,6 +2326,7 @@
             {sessao.user.email}
             <a onClick={()=>{ setTrocando(v=>!v); setMsgSenha(""); }}
               style={{marginLeft:10,color:"#fff",cursor:"pointer",textDecoration:"underline"}}>alterar senha</a>
+            <a onClick={()=>setVerEfetivo(true)} style={{marginLeft:10,color:"#fff",cursor:"pointer",textDecoration:"underline"}}>efetivo</a>
             <a onClick={sair} style={{marginLeft:10,color:"#fff",cursor:"pointer",textDecoration:"underline"}}>sair</a>
           </p>
         </div>
@@ -1848,8 +2407,28 @@
                 </select>
               </div>
             )}
+            <div><label>Nº O.S.</label>
+              <input type="text" value={osFiltro} onChange={e=>setOsFiltro(e.target.value)}
+                onKeyDown={e=>e.key==="Enter"&&buscar()} placeholder="Ex: 12345" style={{width:120}} /></div>
+            <div><label>Colaborador</label>
+              <input type="text" value={colabFiltro} onChange={e=>setColabFiltro(e.target.value)}
+                onKeyDown={e=>e.key==="Enter"&&buscar()} placeholder="Nome ou matrícula" style={{width:180}} /></div>
+            {cfg.filtroAtividade && (
+              <div><label>Serviço</label>
+                <select value={ativFiltro} onChange={e=>setAtivFiltro(e.target.value)}
+                  style={{padding:9,fontSize:14,border:"1px solid #ccc",borderRadius:8,background:"#fff"}}>
+                  <option value="">Todos</option>
+                  {SERVICOS.map(s=><option key={s} value={s}>{s}</option>)}
+                </select>
+              </div>
+            )}
             {/* onClick={buscar} passaria o evento do clique como argumento — daí a arrow */}
             <button className="btn btn-blue" onClick={()=>buscar()} disabled={carregando}>{carregando?"Buscando...":"Buscar"}</button>
+            <button className="btn btn-light" onClick={()=>{ limparFiltros(); }} disabled={carregando}>Limpar filtros</button>
+            <button className="btn btn-light" onClick={baixarCSV} disabled={carregando}
+              title="Uma linha por colaborador por documento — matrícula, data, OS e serviço">
+              Relatório por colaborador (CSV)
+            </button>
             {lista.length>0 && <button className="btn btn-light" onClick={baixarTodos}>Baixar todos (PDF único)</button>}
             {!verLixeira && (
               <button onClick={excluirPeriodo} disabled={carregando}
@@ -2002,7 +2581,7 @@
       const [verifNome,setVerifNome]=useState("");
       const [verifArea,setVerifArea]=useState("");
 
-      const [nomeTmp,setNomeTmp]=useState("");
+      const efetivo=useEfetivo();
       const [equipe,setEquipe]=useState([]); // {nome, rubrica}
       const [rubricaIdx,setRubricaIdx]=useState(null);
 
@@ -2012,7 +2591,7 @@
 
       const mostraToast=(msg,err)=>{ setToast({msg,err}); setTimeout(()=>setToast(null),3000); };
       const setItem=(i,campo,val)=>setAval(a=>a.map((x,j)=>j===i?{...x,[campo]:val}:x));
-      const addNome=()=>{ const v=nomeTmp.trim(); if(!v)return; setEquipe([...equipe,{nome:v,rubrica:null}]); setNomeTmp(""); };
+      const addColab=(c)=>setEquipe([...equipe,{codigo:c.codigo,nome:c.nome,rubrica:null}]);
       const setRubrica=(idx,d)=>setEquipe(eq=>eq.map((m,i)=>i===idx?{...m,rubrica:d}:m));
 
       useEffect(()=>{ (async()=>{ await limparAntigas(); setRecentes((await listarLocal()).filter(r=>(r.tipo==="pt_quente"))); })(); },[]);
@@ -2022,7 +2601,7 @@
       // em disco esperando um formulário que talvez nunca seja finalizado.
       const instantaneo=()=>({ numeroOs, tipoEquipe, empresa, empresaOutra, setor, local, lider,
         descricao, turno, aval, segura, ciente, emissorNome, emissorArea, verifNome, verifArea,
-        equipe: equipe.map(m=>({nome:m.nome})) });
+        equipe: equipe.map(m=>({codigo:m.codigo||null, nome:m.nome})) });
       const [rascunho,setRascunho]=useRascunho("pt_quente", instantaneo,
         [numeroOs,tipoEquipe,empresa,empresaOutra,setor,local,lider,descricao,turno,aval,
          segura,ciente,emissorNome,emissorArea,verifNome,verifArea,equipe]);
@@ -2039,7 +2618,7 @@
         setSegura(d.segura===undefined?null:d.segura); setCiente(!!d.ciente);
         setEmissorNome(d.emissorNome||""); setEmissorArea(d.emissorArea||"");
         setVerifNome(d.verifNome||""); setVerifArea(d.verifArea||"");
-        setEquipe((d.equipe||[]).map(m=>({nome:m.nome, rubrica:null})));
+        setEquipe((d.equipe||[]).map(m=>({codigo:m.codigo||null, nome:m.nome, rubrica:null})));
         window.scrollTo(0,0);
       };
 
@@ -2143,7 +2722,7 @@
           const localId="ptq_"+Date.now();
           const registro={...montarRegistro(), numero_os:osEfetiva, numero_os_base:osBase,
             cliente_id:novoIdCliente()};
-          const colaboradores=equipe.map(m=>m.nome);
+          const colaboradores=equipe.map(m=>({codigo:m.codigo||null, nome:m.nome}));
           const osNome=osEfetiva.replace(/[^\w.-]+/g,"_")||"sem_os";
           const baseItem={ id:localId, tipo:"pt_quente", nome:"PT_quente_"+osNome+".pdf", data:fmtData(agora.current),
             dataISO:new Date().toISOString(), atividade:"PT a Quente", bytes };
@@ -2275,13 +2854,11 @@
         <div className="section">
           <h2>Trabalhadores envolvidos</h2>
           <p className="hint">Até 10. Cada um assina com rubrica.</p>
-          <div className="team-add">
-            <input type="text" value={nomeTmp} onChange={e=>setNomeTmp(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addNome()} placeholder="Nome do trabalhador" />
-            <button className="btn btn-light" onClick={addNome}>+ Add</button>
-          </div>
+          <SeletorColaborador efetivo={efetivo.lista} onAdd={addColab}
+            jaEscolhidos={equipe.map(m=>m.codigo)} placeholder="Nome ou matrícula do trabalhador" />
           {equipe.map((m,i)=>(
             <div key={i} className="team-item">
-              <span className="nome">{m.nome}</span>
+              <EtiquetaColab m={m} />
               {m.rubrica ? <img src={m.rubrica} className="rubrica-mini" alt="rubrica" onClick={()=>setRubricaIdx(i)} />
                 : <button className="btn btn-light" style={{fontSize:12,padding:"6px 10px"}} onClick={()=>setRubricaIdx(i)}>Rubricar</button>}
               <button className="del" onClick={()=>setEquipe(equipe.filter((_,j)=>j!==i))}>×</button>
@@ -2548,7 +3125,7 @@ altura: {
       const [emissorArea,setEmissorArea]=useState("");
       const [verifNome,setVerifNome]=useState("");
       const [verifArea,setVerifArea]=useState("");
-      const [nomeTmp,setNomeTmp]=useState("");
+      const efetivo=useEfetivo();
       const [equipe,setEquipe]=useState([]);
       const [rubricaIdx,setRubricaIdx]=useState(null);
       const [toast,setToast]=useState(null);
@@ -2556,7 +3133,10 @@ altura: {
 
       const mostraToast=(msg,err)=>{ setToast({msg,err}); setTimeout(()=>setToast(null),3000); };
       const setItem=(i,campo,val)=>setAval(a=>a.map((x,j)=>j===i?{...x,[campo]:val}:x));
-      const addNome=()=>{ const v=nomeTmp.trim(); if(!v)return; if(equipe.length>=10){mostraToast("Máximo 10 trabalhadores.",true);return;} setEquipe([...equipe,{nome:v,rubrica:null}]); setNomeTmp(""); };
+      const addColab=(c)=>{
+        if(equipe.length>=10){ mostraToast("Máximo 10 trabalhadores.",true); return; }
+        setEquipe([...equipe,{codigo:c.codigo,nome:c.nome,rubrica:null}]);
+      };
       const setRubrica=(idx,d)=>setEquipe(eq=>eq.map((m,i)=>i===idx?{...m,rubrica:d}:m));
 
       // ===== Documentos do dia (deste PT, neste aparelho) =====
@@ -2569,7 +3149,7 @@ altura: {
       const instantaneo=()=>({ numeroOs, tipoEquipe, empresa, empresaOutra, setor, local, lider,
         descricao, turno, aval, segura, ciente, especial, secoes,
         emissorNome, emissorArea, verifNome, verifArea,
-        equipe: equipe.map(m=>({nome:m.nome})) });   // sem rubrica
+        equipe: equipe.map(m=>({codigo:m.codigo||null, nome:m.nome})) });   // sem rubrica
       const [rascunho,setRascunho]=useRascunho("pt_"+desc.tipo, instantaneo,
         [numeroOs,tipoEquipe,empresa,empresaOutra,setor,local,lider,descricao,turno,aval,
          segura,ciente,especial,secoes,emissorNome,emissorArea,verifNome,verifArea,equipe]);
@@ -2596,7 +3176,7 @@ altura: {
         }
         setEmissorNome(d.emissorNome||""); setEmissorArea(d.emissorArea||"");
         setVerifNome(d.verifNome||""); setVerifArea(d.verifArea||"");
-        setEquipe((d.equipe||[]).map(m=>({nome:m.nome, rubrica:null})));
+        setEquipe((d.equipe||[]).map(m=>({codigo:m.codigo||null, nome:m.nome, rubrica:null})));
         window.scrollTo(0,0);
       };
 
@@ -2928,7 +3508,7 @@ altura: {
           const osEfetiva = osComRevisao(osBase, revisao);
           const bytes=await gerarPDF(osEfetiva); if(!bytes){ setSalvando(false); return; }
           const registro={...montarRegistro(osEfetiva,osBase), cliente_id:novoIdCliente()};
-          const colaboradores=equipe.map(m=>m.nome);
+          const colaboradores=equipe.map(m=>({codigo:m.codigo||null, nome:m.nome}));
           const osNome=(osEfetiva||"sem_os").replace(/[^\w.-]+/g,"_");
           const localId="pt_"+desc.tipo+"_"+Date.now();
           const baseItem={ id:localId, tipo:"pt_"+desc.tipo, nome:"PT_"+desc.tipo+"_"+osNome+".pdf",
@@ -3417,13 +3997,11 @@ altura: {
         <div className="section">
           <h2>Trabalhadores envolvidos</h2>
           <p className="hint">Até 10. Cada um assina com rubrica.</p>
-          <div className="team-add">
-            <input type="text" value={nomeTmp} onChange={e=>setNomeTmp(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addNome()} placeholder="Nome do trabalhador" />
-            <button className="btn btn-light" onClick={addNome}>+ Add</button>
-          </div>
+          <SeletorColaborador efetivo={efetivo.lista} onAdd={addColab}
+            jaEscolhidos={equipe.map(m=>m.codigo)} placeholder="Nome ou matrícula do trabalhador" />
           {equipe.map((m,i)=>(
             <div key={i} className="team-item" style={desc.classificacaoTrab?{flexWrap:"wrap"}:{}}>
-              <span className="nome">{m.nome}</span>
+              <EtiquetaColab m={m} />
               {desc.classificacaoTrab && (
                 <div style={{display:"flex",gap:4,marginRight:6}}>
                   {["MR","MP"].map(op=>(
