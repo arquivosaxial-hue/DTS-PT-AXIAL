@@ -6,7 +6,7 @@
   <title>DTS - Construtora Axial</title>
   <link rel="manifest" href="manifest.json" />
   <meta name="theme-color" content="#185FA5" />
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://unpkg.com https://cdn.jsdelivr.net https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' https://*.supabase.co; frame-ancestors 'none'; base-uri 'self'; form-action 'none'" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://unpkg.com https://cdn.jsdelivr.net https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob: mediastream:; connect-src 'self' https://*.supabase.co; frame-ancestors 'none'; base-uri 'self'; form-action 'none'" />
   <script>
     // Registra o service worker (modo offline). Falha silenciosa se não suportado.
     if ("serviceWorker" in navigator) {
@@ -153,7 +153,7 @@
 
   <script type="text/babel">
     const { useState, useRef, useEffect } = React;
-    const APP_VERSION = "V9";
+    const APP_VERSION = "V10";
 
     // ===== CONFIG SUPABASE =====
     const SUPABASE_URL = "https://atbkjmvogkuekrcoevkn.supabase.co";
@@ -411,15 +411,53 @@
     // Sobe o PDF e manda o registro pela FUNCAO do banco (registrar_dts / registrar_pt).
     // A chave anon nao tem mais privilegio nenhum nas tabelas: este e o unico caminho
     // de escrita que existe. A funcao valida os campos, calcula a revisao sob trava e
+    // Sobe as fotos e devolve a equipe com foto_path no lugar da imagem.
+    //
+    // PRINCÍPIO: foto que não sobe não impede o documento de subir. A DTS é documento
+    // de segurança — se a escolha for entre registrar sem foto ou não registrar, é
+    // sempre sem foto. O colaborador fica com foto_path nulo, e o painel mostra isso
+    // como ausência de foto, que já é o mesmo estado de quem recusou ser fotografado.
+    //
+    // O caminho não leva nome nem matrícula: é o cliente_id (aleatório) mais o índice.
+    // Nome de arquivo em bucket é dado exposto, e nome de trabalhador não entra ali.
+    async function subirFotos(registro, colaboradores){
+      const saida=[];
+      for(let i=0; i<(colaboradores||[]).length; i++){
+        const c=colaboradores[i];
+        const { foto, ...resto }=c;
+        let foto_path=null;
+        if(foto && registro && registro.cliente_id){
+          const caminho=registro.cliente_id+"/"+i+".jpg";
+          try{
+            const { error }=await supa.storage.from("rubricas")
+              .upload(caminho, dataUrlParaBlob(foto), { upsert:false, contentType:"image/jpeg" });
+            if(!error){
+              foto_path=caminho;
+            }else{
+              // Reenvio da fila: o arquivo já subiu numa tentativa anterior e o
+              // bucket recusa a duplicata. Isso é sucesso, não falha — o anon não
+              // tem upsert (não tem UPDATE no storage), então esta é a via normal.
+              const msg=String(error.message||"").toLowerCase();
+              if(msg.includes("exist") || String(error.statusCode||"")==="409") foto_path=caminho;
+            }
+          }catch(_){ /* rede caiu no meio: segue sem a foto */ }
+        }
+        saida.push({ ...resto, foto_path });
+      }
+      return saida;
+    }
+
     // grava documento + equipe na MESMA transacao — nada de DTS orfa sem equipe.
     async function enviarDocumento({ rpc, caminhoPdf, registro, colaboradores, bytes }){
+      const equipe = await subirFotos(registro, colaboradores);
+
       const { error:eUp } = await supa.storage.from("dts-pdfs")
         .upload(caminhoPdf, new Blob([bytes],{type:"application/pdf"}), { upsert:false, contentType:"application/pdf" });
       if(eUp) throw eUp; // sem PDF garantido, nao registra
 
       const { data, error } = await supa.rpc(rpc, {
         p_registro: registro,
-        p_colaboradores: colaboradores || [],
+        p_colaboradores: equipe,
         p_pdf_path: caminhoPdf,
       });
       // O anon perdeu o direito de apagar no Storage, entao um PDF orfao pode sobrar
@@ -632,7 +670,10 @@
       const { data, error } = await supa.rpc("listar_efetivo");
       if(error) throw error;
       const lista = (data||[]).map(c=>({
-        codigo:String(c.codigo||""), nome:c.nome||"", funcao:c.funcao||"" }));
+        codigo:String(c.codigo||""), nome:c.nome||"", funcao:c.funcao||"",
+        // miniatura da rubrica cadastrada: lembrete para o trabalhador em campo.
+        // A referência em qualidade cheia fica no painel e não sai de lá.
+        rubricaMini:c.rubrica_mini||null }));
       try{
         localStorage.setItem(EFETIVO_CACHE, JSON.stringify({ lista, em:new Date().toISOString() }));
       }catch(_){}   // aparelho com armazenamento cheio: segue com a lista em memória
@@ -670,8 +711,8 @@
         .filter(c=>!escolhidos.has(c.codigo))
         .filter(c=>c.nome.toLowerCase().includes(q) || c.codigo.toLowerCase().includes(q))
         .slice(0,8);
-      const escolher=(c)=>{ onAdd({codigo:c.codigo, nome:c.nome}); setBusca(""); };
-      const digitar=()=>{ const v=busca.trim(); if(!v) return; onAdd({codigo:null, nome:v}); setBusca(""); };
+      const escolher=(c)=>{ onAdd({codigo:c.codigo, nome:c.nome, rubricaMini:c.rubricaMini||null}); setBusca(""); };
+      const digitar=()=>{ const v=busca.trim(); if(!v) return; onAdd({codigo:null, nome:v, rubricaMini:null}); setBusca(""); };
       return (
         <div>
           <div className="team-add">
@@ -722,39 +763,198 @@
       );
     }
 
+    // ===== FOTO NO MOMENTO DA RUBRICA =====
+    // Existe por um motivo específico, relatado pela Axial: na frente, um colaborador
+    // acaba assinando por todos para ganhar tempo. A foto não impede isso — quem
+    // assina pelo outro pode fotografar o outro. O que ela faz é obrigar a aparecerem
+    // rostos DIFERENTES, e isso fica evidente no painel.
+    //
+    // Se o jurídico da Axial não aprovar o termo de uso de imagem, basta virar esta
+    // constante para false: a rubrica e a hora continuam funcionando iguais, e nada
+    // mais no código precisa mudar.
+    const FOTO_ATIVA = true;
+    const FOTO_LADO = 640;        // lado maior da imagem gravada
+    const FOTO_QUALIDADE = 0.6;   // ~60 KB por foto
+
+    // A frontal é o padrão porque assinar com o dedo num aparelho que OUTRA pessoa
+    // segura é desconfortável — na prática quem assina pega o telefone. Então a
+    // frontal registra justamente quem estava com o celular na mão. A traseira fica
+    // no botão de alternar, para quando o encarregado realmente estiver segurando.
+    const CAM_PADRAO_FRONTAL = true;
+
+    function dataUrlParaBlob(dataUrl){
+      const [cabecalho, b64] = String(dataUrl||"").split(",");
+      const mime = (cabecalho.match(/:(.*?);/) || [])[1] || "image/jpeg";
+      const bin = atob(b64 || "");
+      const arr = new Uint8Array(bin.length);
+      for(let i=0;i<bin.length;i++) arr[i] = bin.charCodeAt(i);
+      return new Blob([arr], { type: mime });
+    }
+
+    // Miniatura grosseira da rubrica de referência. Ela é o que viaja para o celular
+    // (ver banco/05-rubrica-foto.sql): serve de lembrete para o trabalhador e é ruim
+    // demais para decalcar. A referência em qualidade cheia nunca sai do painel.
+    function miniaturaRubrica(dataUrl){
+      return new Promise((resolve)=>{
+        const img = new Image();
+        img.onload = ()=>{
+          const c = document.createElement("canvas");
+          c.width = 100; c.height = 38;
+          const ctx = c.getContext("2d");
+          ctx.fillStyle = "#fff"; ctx.fillRect(0,0,c.width,c.height);
+          ctx.drawImage(img, 0, 0, c.width, c.height);
+          resolve(c.toDataURL("image/png"));
+        };
+        img.onerror = ()=>resolve(null);
+        img.src = dataUrl;
+      });
+    }
+
     // --- Canvas de rubrica ---
-    function RubricaModal({ onClose, onSave }) {
+    // colaborador: {nome, rubricaMini}. comFoto=false desliga o passo da foto —
+    // é assim que a tela do efetivo colhe a rubrica de referência no escritório.
+    function RubricaModal({ onClose, onSave, colaborador, comFoto }) {
       const canvasRef = useRef(null);
       const drawing = useRef(false);
+      const tocou = useRef(false);          // houve traço? evita salvar rubrica vazia
+      const [etapa,setEtapa] = useState("rubrica");   // rubrica | foto
+      const rubricaRef = useRef(null);
+      const [frontal,setFrontal] = useState(CAM_PADRAO_FRONTAL);
+      const [camErro,setCamErro] = useState("");
+      const [pronta,setPronta] = useState(false);
+      const videoRef = useRef(null);
+      const streamRef = useRef(null);
+      const querFoto = comFoto !== false && FOTO_ATIVA;
+
       useEffect(()=>{
         const c=canvasRef.current; const ctx=c.getContext("2d");
         ctx.strokeStyle="#0a1a3a"; ctx.lineWidth=2.2; ctx.lineCap="round"; ctx.lineJoin="round";
       },[]);
+
+      // A câmera precisa ser desligada em TODA saída — inclusive se o componente
+      // sumir por outro caminho. Stream esquecido aberto acende a luz da câmera e
+      // come bateria em aparelho que já está o dia inteiro em obra.
+      const pararCamera=()=>{
+        if(streamRef.current){
+          try{ streamRef.current.getTracks().forEach(t=>t.stop()); }catch(_){}
+          streamRef.current=null;
+        }
+      };
+      useEffect(()=>()=>pararCamera(), []);
+
+      async function abrirCamera(usarFrontal){
+        pararCamera(); setPronta(false); setCamErro("");
+        try{
+          const s = await navigator.mediaDevices.getUserMedia({
+            video:{ facingMode: usarFrontal ? "user" : "environment",
+                    width:{ideal:FOTO_LADO}, height:{ideal:480} },
+            audio:false });
+          streamRef.current = s;
+          if(videoRef.current){ videoRef.current.srcObject = s; await videoRef.current.play(); }
+          setPronta(true);
+        }catch(_){
+          // permissão negada, sem câmera, ou navegador sem suporte: segue sem foto
+          setCamErro("Não foi possível abrir a câmera neste aparelho.");
+        }
+      }
+
       const pos=(e)=>{ const c=canvasRef.current; const r=c.getBoundingClientRect();
         const t=e.touches?e.touches[0]:e; return { x:(t.clientX-r.left)*(c.width/r.width), y:(t.clientY-r.top)*(c.height/r.height) }; };
-      const start=(e)=>{ e.preventDefault(); drawing.current=true; const ctx=canvasRef.current.getContext("2d"); const p=pos(e); ctx.beginPath(); ctx.moveTo(p.x,p.y); };
+      const start=(e)=>{ e.preventDefault(); drawing.current=true; tocou.current=true; const ctx=canvasRef.current.getContext("2d"); const p=pos(e); ctx.beginPath(); ctx.moveTo(p.x,p.y); };
       const move=(e)=>{ if(!drawing.current)return; e.preventDefault(); const ctx=canvasRef.current.getContext("2d"); const p=pos(e); ctx.lineTo(p.x,p.y); ctx.stroke(); };
       const end=()=>{ drawing.current=false; };
-      const limpar=()=>{ const c=canvasRef.current; c.getContext("2d").clearRect(0,0,c.width,c.height); };
-      const salvar=()=>{ onSave(canvasRef.current.toDataURL("image/png")); };
-      return (<div className="modal-bg" onClick={onClose}>
+      const limpar=()=>{ const c=canvasRef.current; c.getContext("2d").clearRect(0,0,c.width,c.height); tocou.current=false; };
+
+      const fechar=()=>{ pararCamera(); onClose(); };
+      const concluir=(foto)=>{ pararCamera(); onSave({ rubrica: rubricaRef.current, foto: foto||null }); };
+
+      const salvarRubrica=()=>{
+        if(!tocou.current) return;                   // canvas em branco não vira rubrica
+        rubricaRef.current = canvasRef.current.toDataURL("image/png");
+        if(!querFoto){ concluir(null); return; }
+        setEtapa("foto");
+        abrirCamera(frontal);
+      };
+
+      const trocarCamera=()=>{ const f=!frontal; setFrontal(f); abrirCamera(f); };
+
+      const capturar=()=>{
+        const v=videoRef.current;
+        if(!v || !v.videoWidth){ concluir(null); return; }
+        const c=document.createElement("canvas");
+        const esc=Math.min(1, FOTO_LADO/Math.max(v.videoWidth, v.videoHeight));
+        c.width=Math.round(v.videoWidth*esc); c.height=Math.round(v.videoHeight*esc);
+        // grava SEM espelhar: o preview é espelhado só por conforto de quem se vê
+        c.getContext("2d").drawImage(v, 0, 0, c.width, c.height);
+        concluir(c.toDataURL("image/jpeg", FOTO_QUALIDADE));
+      };
+
+      return (<div className="modal-bg" onClick={fechar}>
         <div className="modal" onClick={e=>e.stopPropagation()}>
-          <h3>Rubrica</h3>
-          <p style={{fontSize:12,color:"#888",margin:"0 0 8px"}}>Desenhe a rubrica com o dedo</p>
-          <canvas ref={canvasRef} width="320" height="120" className="rubrica-canvas" style={{width:"100%",height:120}}
-            onMouseDown={start} onMouseMove={move} onMouseUp={end} onMouseLeave={end}
-            onTouchStart={start} onTouchMove={move} onTouchEnd={end}></canvas>
-          <div style={{display:"flex",gap:8,marginTop:12}}>
-            <button className="btn btn-light" style={{flex:1}} onClick={limpar}>Limpar</button>
-            <button className="btn btn-light" style={{flex:1}} onClick={onClose}>Cancelar</button>
-            <button className="btn btn-blue" style={{flex:1}} onClick={salvar}>Salvar</button>
-          </div>
+          {etapa==="rubrica" ? (
+            <div>
+              <h3>Rubrica{colaborador && colaborador.nome ? " — "+colaborador.nome : ""}</h3>
+              {colaborador && colaborador.rubricaMini && (
+                // Lembrete de como a própria pessoa assinou no cadastro. É o remédio
+                // para o problema de cada documento sair com um desenho diferente.
+                <div style={{display:"flex",alignItems:"center",gap:8,margin:"0 0 8px",
+                             background:"#f7fafd",border:"1px solid #dbe6f2",borderRadius:8,padding:"6px 8px"}}>
+                  <span style={{fontSize:11,color:"#0C447C"}}>Sua rubrica cadastrada:</span>
+                  <img src={colaborador.rubricaMini} alt="rubrica cadastrada"
+                       style={{height:30,background:"#fff",border:"1px solid #eee",borderRadius:4}} />
+                </div>
+              )}
+              <p style={{fontSize:12,color:"#888",margin:"0 0 8px"}}>Desenhe a rubrica com o dedo</p>
+              <canvas ref={canvasRef} width="320" height="120" className="rubrica-canvas" style={{width:"100%",height:120}}
+                onMouseDown={start} onMouseMove={move} onMouseUp={end} onMouseLeave={end}
+                onTouchStart={start} onTouchMove={move} onTouchEnd={end}></canvas>
+              <div style={{display:"flex",gap:8,marginTop:12}}>
+                <button className="btn btn-light" style={{flex:1}} onClick={limpar}>Limpar</button>
+                <button className="btn btn-light" style={{flex:1}} onClick={fechar}>Cancelar</button>
+                <button className="btn btn-blue" style={{flex:1}} onClick={salvarRubrica}>
+                  {querFoto ? "Continuar" : "Salvar"}
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div>
+              <h3>Confirme com a foto</h3>
+              <p style={{fontSize:12,color:"#888",margin:"0 0 8px"}}>
+                {colaborador && colaborador.nome ? colaborador.nome+", enquadre" : "Enquadre"} o rosto e toque em tirar foto.
+              </p>
+              {camErro
+                ? <div style={{background:"#FFF6E5",border:"1px solid #E7C77A",borderRadius:8,
+                               padding:"10px 12px",fontSize:13,color:"#7A5510"}}>
+                    {camErro} A rubrica já está salva — siga sem foto.
+                  </div>
+                : <div style={{position:"relative",background:"#000",borderRadius:8,overflow:"hidden"}}>
+                    <video ref={videoRef} playsInline muted
+                      style={{width:"100%",maxHeight:300,display:"block",
+                              transform: frontal ? "scaleX(-1)" : "none"}}></video>
+                    {!pronta && <div style={{position:"absolute",inset:0,display:"flex",alignItems:"center",
+                                             justifyContent:"center",color:"#fff",fontSize:13}}>abrindo a câmera…</div>}
+                  </div>}
+              <div style={{display:"flex",gap:8,marginTop:12,flexWrap:"wrap"}}>
+                {!camErro && <button className="btn btn-light" style={{flex:1}} onClick={trocarCamera}>
+                  {frontal ? "Usar traseira" : "Usar frontal"}
+                </button>}
+                {/* Recusar a foto não pode travar documento de segurança — e um
+                    consentimento que não dá para recusar não é consentimento. */}
+                <button className="btn btn-light" style={{flex:1}} onClick={()=>concluir(null)}>Sem foto</button>
+                {!camErro && <button className="btn btn-blue" style={{flex:1}} disabled={!pronta} onClick={capturar}>Tirar foto</button>}
+              </div>
+            </div>
+          )}
         </div>
       </div>);
     }
 
     function App({ onVoltar }) {
       const agora = useRef(new Date());
+      // Origem para medir o intervalo entre uma rubrica e a seguinte. performance.now()
+      // NÃO acompanha o relógio do sistema: mexer na hora do celular não maquia os
+      // intervalos, que é justamente o que se quer detectar (assinatura em bloco).
+      const t0 = useRef(performance.now());
       const [numeroOs,setNumeroOs]=useState("");
       const [elaborador,setElaborador]=useState("");
       const [lider,setLider]=useState("");
@@ -887,8 +1087,15 @@
       const updRiscoManual=(eid,idx,campo,val)=> setRiscosManuais(m=>({...m,[eid]:(m[eid]||[]).map((x,i)=>i===idx?{...x,[campo]:val}:x)}));
       const delRiscoManual=(eid,idx)=> setRiscosManuais(m=>({...m,[eid]:(m[eid]||[]).filter((_,i)=>i!==idx)}));
 
-      const addColab=(c)=>setEquipe([...equipe,{codigo:c.codigo,nome:c.nome,rubrica:null}]);
-      const setRubrica=(idx,dataUrl)=> setEquipe(eq=>eq.map((m,i)=>i===idx?{...m,rubrica:dataUrl}:m));
+      const addColab=(c)=>setEquipe([...equipe,{codigo:c.codigo,nome:c.nome,rubricaMini:c.rubricaMini||null,rubrica:null}]);
+      // Recebe {rubrica, foto} do modal e carimba QUANDO foi feita: hora de parede
+      // para exibir e tempo relativo para comparar. Quatro rubricas com 3 segundos de
+      // intervalo entre si não foram quatro pessoas.
+      const setRubrica=(idx,d)=> setEquipe(eq=>eq.map((m,i)=>i===idx?{
+        ...m, rubrica:d.rubrica, foto:d.foto||null,
+        rubricadoEm:new Date().toISOString(),
+        tRelMs:Math.round(performance.now()-t0.current)
+      }:m));
 
       // monta as linhas da tabela (1 risco = 1 linha)
       const montarLinhas=()=>{
@@ -1168,14 +1375,20 @@
           // é ele que impede uma segunda cópia quando a resposta do envio se perde
           const registro={...montarRegistro(), numero_os:osEfetiva, numero_os_base:osBase,
             cliente_id:novoIdCliente()};
-          const colaboradores=equipe.map(m=>({codigo:m.codigo||null, nome:m.nome}));
+          // 'foto' vai como data URL; enviarDocumento sobe para o bucket e troca por
+          // foto_path antes de chamar a função de registro.
+          const colaboradores=equipe.map(m=>({
+            codigo:m.codigo||null, nome:m.nome,
+            rubricado_em:m.rubricadoEm||null,
+            t_rel_ms:(m.tRelMs==null?null:m.tRelMs),
+            foto:m.foto||null }));
           const osNome=osEfetiva.replace(/[^\w.-]+/g,"_")||"sem_os";
 
           // 3) guarda cópia local "DTSs de hoje"
           const dados={ numeroOs, elaborador, lider, area, atividade, local,
             tipoEquipe, empresa, empresaOutra,
             criticas, etapasSel, riscoSel, etapasOutras, riscosManuais, epis, outros,
-            equipe: colaboradores };
+            equipe: colaboradores.map(c=>({codigo:c.codigo, nome:c.nome})) };
           await salvarLocal({ id:localId, tipo:"dts", nome:"DTS_"+osNome+".pdf", data:fmtData(agora.current),
             dataISO:new Date().toISOString(), atividade, bytes, dados });
           setRecentes(await listarDTSLocal());
@@ -1407,7 +1620,8 @@
           <button className="btn btn-blue" disabled={salvando} onClick={salvarEGerar}>{salvando?"Salvando...":"Salvar e gerar PDF"}</button>
         </div>
 
-        {rubricaIdx!==null && <RubricaModal onClose={()=>setRubricaIdx(null)} onSave={(d)=>{ setRubrica(rubricaIdx,d); setRubricaIdx(null); }} />}
+        {rubricaIdx!==null && <RubricaModal colaborador={equipe[rubricaIdx]}
+          onClose={()=>setRubricaIdx(null)} onSave={(d)=>{ setRubrica(rubricaIdx,d); setRubricaIdx(null); }} />}
         {qrModal && <QRModal url={qrModal.url} item={qrModal.item} onClose={()=>setQrModal(null)} />}
         {toast && <div className={"toast"+(toast.err?" err":"")}>{toast.msg}</div>}
       </div>);
@@ -1581,6 +1795,84 @@
       return { linhas:ok, ruins };
     }
 
+    // ===== EQUIPE DE UM DOCUMENTO =====
+    // Onde os dados novos viram controle. Sem esta tela, gravar hora e foto não
+    // impede nada — ninguém olharia. O que interessa é a coluna de intervalo:
+    // quatro rubricas com 3 segundos entre si não foram quatro pessoas.
+    function EquipeDoDocumento({ item, cfg }){
+      const [linhas,setLinhas]=useState(null);   // null = carregando
+      const [erro,setErro]=useState("");
+      useEffect(()=>{
+        let vivo=true;
+        (async()=>{
+          const { data, error }=await supa.from(cfg.colab)
+            .select("codigo,nome,ordem,rubricado_em,t_rel_ms,foto_path")
+            .eq(cfg.fk, item.id).order("ordem");
+          if(!vivo) return;
+          if(error){ setErro("Não foi possível carregar a equipe: "+error.message); setLinhas([]); return; }
+          setLinhas(data||[]);
+        })();
+        return ()=>{ vivo=false; };
+      },[item.id]);
+
+      async function verFoto(caminho){
+        // bucket privado: link temporário, nunca URL pública (ver 2.5 do CLAUDE.md)
+        const { data, error }=await supa.storage.from("rubricas").createSignedUrl(caminho, 3600);
+        if(error || !data){ alert("Não foi possível abrir a foto: "+((error&&error.message)||"")); return; }
+        window.open(data.signedUrl, "_blank");
+      }
+
+      if(linhas===null) return <p style={{fontSize:12,color:"#888",margin:"8px 0 0"}}>carregando equipe…</p>;
+      if(erro) return <p style={{fontSize:12,color:"#A32D2D",margin:"8px 0 0"}}>{erro}</p>;
+      if(!linhas.length) return <p style={{fontSize:12,color:"#888",margin:"8px 0 0"}}>Nenhum colaborador registrado neste documento.</p>;
+
+      // Intervalo em relação à rubrica anterior. Vem de t_rel_ms, medido por tempo
+      // decorrido — mudar o relógio do aparelho não altera esses números.
+      const comIntervalo=linhas.map((l,i)=>{
+        const ant=i>0 ? linhas[i-1] : null;
+        const dt=(ant && ant.t_rel_ms!=null && l.t_rel_ms!=null) ? (l.t_rel_ms-ant.t_rel_ms) : null;
+        return { ...l, intervalo:dt };
+      });
+      const gaps=comIntervalo.map(l=>l.intervalo).filter(x=>x!=null);
+      const rapidas=gaps.filter(x=>x<8000).length;   // menos de 8s entre uma e outra
+
+      return (
+        <div style={{marginTop:10,borderTop:"1px solid #eee",paddingTop:8}}>
+          {gaps.length>0 && rapidas>=Math.max(1,Math.ceil(gaps.length/2)) && (
+            <div style={{fontSize:12,color:"#7A5510",background:"#FFF6E5",border:"1px solid #E7C77A",
+                         borderRadius:6,padding:"6px 9px",marginBottom:8,lineHeight:1.4}}>
+              <b>Assinaturas muito próximas:</b> {rapidas} de {gaps.length} intervalos abaixo de 8 segundos.
+              Pode ser uma pessoa rubricando pelos demais — vale conferir as fotos.
+            </div>
+          )}
+          {comIntervalo.map((l,i)=>(
+            <div key={i} style={{display:"flex",alignItems:"center",gap:8,fontSize:12,
+                                 padding:"5px 0",borderBottom:"1px solid #f6f6f6",flexWrap:"wrap"}}>
+              <span style={{flex:1,minWidth:150}}>
+                {l.nome}
+                {l.codigo ? <span style={{color:"#888"}}> · {l.codigo}</span>
+                          : <span style={{color:"#B07A16"}}> · sem matrícula</span>}
+              </span>
+              <span style={{color:"#666",minWidth:58}}>
+                {l.rubricado_em ? new Date(l.rubricado_em).toLocaleTimeString("pt-BR",{hour:"2-digit",minute:"2-digit",second:"2-digit"}) : "—"}
+              </span>
+              <span style={{minWidth:56,color: l.intervalo!=null && l.intervalo<8000 ? "#A32D2D" : "#888"}}>
+                {l.intervalo==null ? "" : "+"+(l.intervalo/1000).toFixed(0)+"s"}
+              </span>
+              {l.foto_path
+                ? <button className="btn btn-light" style={{fontSize:11,padding:"4px 9px"}}
+                    onClick={()=>verFoto(l.foto_path)}>Ver foto</button>
+                : <span style={{color:"#bbb",fontSize:11}}>sem foto</span>}
+            </div>
+          ))}
+          <p style={{fontSize:11,color:"#aaa",margin:"8px 0 0",lineHeight:1.4}}>
+            O horário vem do relógio do aparelho e serve para exibir. O intervalo vem de
+            tempo decorrido e não muda se alguém mexer na hora do celular.
+          </p>
+        </div>
+      );
+    }
+
     // ===== EFETIVO — tela do administrador =====
     // Fica dentro do painel de propósito: já há sessão autenticada aqui, e o efetivo
     // é dado pessoal de trabalhador (LGPD). Uma tela separada exigiria repetir o
@@ -1600,12 +1892,32 @@
       const [previa,setPrevia]=useState(null);      // {linhas, ruins}
       const [desligarAusentes,setDesligarAusentes]=useState(true);
       const arquivoRef=React.useRef(null);
+      const [rubricando,setRubricando]=useState(null);   // colaborador colhendo a referência
+
+      // A referência é colhida UMA vez, no escritório, com calma — não em vala com
+      // luva suja. É ela que dá ao trabalhador um padrão para repetir e ao perito
+      // algo com que comparar. Sem foto aqui: o termo de imagem cobre o momento da
+      // rubrica em campo, não o cadastro.
+      async function salvarRubricaRef(colab, dados){
+        setCarregando(true); setErro(""); setMsg("");
+        try{
+          const mini = await miniaturaRubrica(dados.rubrica);
+          const { error }=await supa.from("colaboradores").update({
+            rubrica_ref:dados.rubrica, rubrica_mini:mini,
+            atualizado_em:new Date().toISOString() }).eq("codigo", colab.codigo);
+          if(error) throw error;
+          setMsg("Rubrica de referência de "+colab.nome+" salva.");
+          await carregar();
+          try{ await baixarEfetivo(); }catch(_){}   // atualiza a cópia deste aparelho
+        }catch(e){ setErro("Erro ao salvar a rubrica: "+e.message); }
+        finally{ setCarregando(false); setRubricando(null); }
+      }
 
       async function carregar(){
         setCarregando(true); setErro("");
         try{
           const { data, error }=await supa.from("colaboradores")
-            .select("codigo,nome,funcao,situacao,atualizado_em").order("nome");
+            .select("codigo,nome,funcao,situacao,atualizado_em,rubrica_ref").order("nome");
           if(error) throw error;
           setLista(data||[]);
         }catch(e){ setErro("Não foi possível carregar o efetivo: "+e.message); }
@@ -1824,6 +2136,14 @@
                   {c.nome}
                   <span style={{color:"#888",fontSize:11}}> · {c.codigo}{c.funcao?" · "+c.funcao:""}</span>
                 </span>
+                {c.rubrica_ref
+                  ? <img src={c.rubrica_ref} alt="rubrica de referência" title="Rubrica cadastrada"
+                      style={{height:26,background:"#fff",border:"1px solid #eee",borderRadius:4}} />
+                  : <span style={{fontSize:11,color:"#B07A16"}}>sem rubrica</span>}
+                <button className="btn btn-light" style={{fontSize:11,padding:"4px 9px"}}
+                  onClick={()=>setRubricando(c)} disabled={carregando}>
+                  {c.rubrica_ref ? "Refazer" : "Colher rubrica"}
+                </button>
                 <span style={{fontSize:11,fontWeight:600,color:cor[c.situacao]||"#666"}}>{c.situacao}</span>
                 <select value={c.situacao} onChange={e=>mudarSituacao(c, e.target.value)} disabled={carregando}
                   style={{padding:"5px 7px",fontSize:12,border:"1px solid #ccc",borderRadius:6,background:"#fff"}}>
@@ -1835,6 +2155,12 @@
             ))}
           </div>
         </div>
+
+        {rubricando && (
+          <RubricaModal colaborador={{ nome:rubricando.nome }} comFoto={false}
+            onClose={()=>setRubricando(null)}
+            onSave={(d)=>salvarRubricaRef(rubricando, d)} />
+        )}
 
         <div className="footer-actions">
           <button className="btn btn-light" onClick={onVoltar}>← Voltar ao painel</button>
@@ -2004,6 +2330,7 @@
       const [colabFiltro,setColabFiltro]=useState("");
       const [ativFiltro,setAtivFiltro]=useState("");
       const [verEfetivo,setVerEfetivo]=useState(false);
+      const [equipeAberta,setEquipeAberta]=useState(null);   // id do documento expandido
       const [lista,setLista]=useState([]);
       const [carregando,setCarregando]=useState(false);
       const [prog,setProg]=useState(null);   // {feitos,total,restante} do "Baixar todos"
@@ -2552,7 +2879,7 @@
           {msg && <p style={{color:"#666",fontSize:13}}>{msg}</p>}
           <div style={{marginTop:16}}>
             {lista.map(item=>(
-              <div key={item.id} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 12px",border:"1px solid #eee",borderRadius:8,marginBottom:8}}>
+              <div key={item.id} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 12px",border:"1px solid #eee",borderRadius:8,marginBottom:8,flexWrap:"wrap"}}>
                 <div style={{flex:1}}>
                   <div style={{fontSize:14,fontWeight:500}}>{item[cfg.colTitulo]||"(sem descrição)"} — OS {item.numero_os||"-"}</div>
                   <div style={{fontSize:12,color:"#888"}}>{item.data_atividade||item.created_at?.slice(0,10)} · {item[cfg.colLocal]||"-"} · {item[cfg.colLider]||"-"}</div>
@@ -2573,12 +2900,20 @@
                       <input type="file" accept="application/pdf" style={{display:"none"}} onChange={e=>{ const f=e.target.files&&e.target.files[0]; e.target.value=""; anexarPdf(item,f); }} />
                     </label>
                 }
+                <button className="btn btn-light" style={{fontSize:13,padding:"7px 12px"}}
+                  title="Quem assinou, a que horas e com que intervalo"
+                  onClick={()=>setEquipeAberta(x=>x===item.id?null:item.id)}>
+                  {equipeAberta===item.id ? "Ocultar equipe" : "Ver equipe"}
+                </button>
                 {verLixeira
                   ? <button style={{fontSize:13,padding:"7px 10px",borderRadius:8,border:"1px solid #2E7D32",background:"#fff",color:"#2E7D32",cursor:"pointer"}}
                       onClick={()=>restaurar(item)} title="Tirar da lixeira e voltar às listagens">Restaurar</button>
                   : <button style={{fontSize:13,padding:"7px 10px",borderRadius:8,border:"1px solid #A32D2D",background:"#fff",color:"#A32D2D",cursor:"pointer"}}
                       onClick={()=>excluirUma(item)} title="Enviar este registro para a lixeira">Lixeira</button>
                 }
+                {equipeAberta===item.id && (
+                  <div style={{flexBasis:"100%"}}><EquipeDoDocumento item={item} cfg={cfg} /></div>
+                )}
               </div>
             ))}
           </div>
@@ -2611,6 +2946,10 @@
     function AppPTQuente({ onVoltar }) {
       const LC = LIMITES_CAB.quente || {}; // limites de caracteres do cabeçalho (PT a Quente)
       const agora = useRef(new Date());
+      // Origem para medir o intervalo entre uma rubrica e a seguinte. performance.now()
+      // NÃO acompanha o relógio do sistema: mexer na hora do celular não maquia os
+      // intervalos, que é justamente o que se quer detectar (assinatura em bloco).
+      const t0 = useRef(performance.now());
       const [numeroOs,setNumeroOs]=useState("");
       const [tipoEquipe,setTipoEquipe]=useState("contratada");
       const CONTRATADAS=["Construtora Axial"];
@@ -2643,8 +2982,15 @@
 
       const mostraToast=(msg,err)=>{ setToast({msg,err}); setTimeout(()=>setToast(null),3000); };
       const setItem=(i,campo,val)=>setAval(a=>a.map((x,j)=>j===i?{...x,[campo]:val}:x));
-      const addColab=(c)=>setEquipe([...equipe,{codigo:c.codigo,nome:c.nome,rubrica:null}]);
-      const setRubrica=(idx,d)=>setEquipe(eq=>eq.map((m,i)=>i===idx?{...m,rubrica:d}:m));
+      const addColab=(c)=>setEquipe([...equipe,{codigo:c.codigo,nome:c.nome,rubricaMini:c.rubricaMini||null,rubrica:null}]);
+      // Recebe {rubrica, foto} do modal e carimba QUANDO foi feita: hora de parede
+      // para exibir e tempo relativo para comparar. Quatro rubricas com 3 segundos de
+      // intervalo entre si não foram quatro pessoas.
+      const setRubrica=(idx,d)=> setEquipe(eq=>eq.map((m,i)=>i===idx?{
+        ...m, rubrica:d.rubrica, foto:d.foto||null,
+        rubricadoEm:new Date().toISOString(),
+        tRelMs:Math.round(performance.now()-t0.current)
+      }:m));
 
       useEffect(()=>{ (async()=>{ await limparAntigas(); setRecentes((await listarLocal()).filter(r=>(r.tipo==="pt_quente"))); })(); },[]);
 
@@ -2774,7 +3120,13 @@
           const localId="ptq_"+Date.now();
           const registro={...montarRegistro(), numero_os:osEfetiva, numero_os_base:osBase,
             cliente_id:novoIdCliente()};
-          const colaboradores=equipe.map(m=>({codigo:m.codigo||null, nome:m.nome}));
+          // 'foto' vai como data URL; enviarDocumento sobe para o bucket e troca por
+          // foto_path antes de chamar a função de registro.
+          const colaboradores=equipe.map(m=>({
+            codigo:m.codigo||null, nome:m.nome,
+            rubricado_em:m.rubricadoEm||null,
+            t_rel_ms:(m.tRelMs==null?null:m.tRelMs),
+            foto:m.foto||null }));
           const osNome=osEfetiva.replace(/[^\w.-]+/g,"_")||"sem_os";
           const baseItem={ id:localId, tipo:"pt_quente", nome:"PT_quente_"+osNome+".pdf", data:fmtData(agora.current),
             dataISO:new Date().toISOString(), atividade:"PT a Quente", bytes };
@@ -2922,7 +3274,8 @@
           <button className="btn btn-blue" disabled={salvando} onClick={salvarEGerar}>{salvando?"Salvando...":"Salvar e gerar PDF"}</button>
         </div>
 
-        {rubricaIdx!==null && <RubricaModal onClose={()=>setRubricaIdx(null)} onSave={(d)=>{ setRubrica(rubricaIdx,d); setRubricaIdx(null); }} />}
+        {rubricaIdx!==null && <RubricaModal colaborador={equipe[rubricaIdx]}
+          onClose={()=>setRubricaIdx(null)} onSave={(d)=>{ setRubrica(rubricaIdx,d); setRubricaIdx(null); }} />}
         {toast && <div className={"toast"+(toast.err?" err":"")}>{toast.msg}</div>}
       </div>);
     }
@@ -3138,6 +3491,10 @@ altura: {
       const C = desc.coord;
       const LC = LIMITES_CAB[desc.tipo] || {}; // limites de caracteres do cabeçalho deste PT
       const agora = useRef(new Date());
+      // Origem para medir o intervalo entre uma rubrica e a seguinte. performance.now()
+      // NÃO acompanha o relógio do sistema: mexer na hora do celular não maquia os
+      // intervalos, que é justamente o que se quer detectar (assinatura em bloco).
+      const t0 = useRef(performance.now());
       const [numeroOs,setNumeroOs]=useState("");
       const [tipoEquipe,setTipoEquipe]=useState("contratada");
       const CONTRATADAS=["Construtora Axial"];
@@ -3187,9 +3544,16 @@ altura: {
       const setItem=(i,campo,val)=>setAval(a=>a.map((x,j)=>j===i?{...x,[campo]:val}:x));
       const addColab=(c)=>{
         if(equipe.length>=10){ mostraToast("Máximo 10 trabalhadores.",true); return; }
-        setEquipe([...equipe,{codigo:c.codigo,nome:c.nome,rubrica:null}]);
+        setEquipe([...equipe,{codigo:c.codigo,nome:c.nome,rubricaMini:c.rubricaMini||null,rubrica:null}]);
       };
-      const setRubrica=(idx,d)=>setEquipe(eq=>eq.map((m,i)=>i===idx?{...m,rubrica:d}:m));
+      // Recebe {rubrica, foto} do modal e carimba QUANDO foi feita: hora de parede
+      // para exibir e tempo relativo para comparar. Quatro rubricas com 3 segundos de
+      // intervalo entre si não foram quatro pessoas.
+      const setRubrica=(idx,d)=> setEquipe(eq=>eq.map((m,i)=>i===idx?{
+        ...m, rubrica:d.rubrica, foto:d.foto||null,
+        rubricadoEm:new Date().toISOString(),
+        tRelMs:Math.round(performance.now()-t0.current)
+      }:m));
 
       // ===== Documentos do dia (deste PT, neste aparelho) =====
       const [recentes,setRecentes]=useState([]);
@@ -3560,7 +3924,13 @@ altura: {
           const osEfetiva = osComRevisao(osBase, revisao);
           const bytes=await gerarPDF(osEfetiva); if(!bytes){ setSalvando(false); return; }
           const registro={...montarRegistro(osEfetiva,osBase), cliente_id:novoIdCliente()};
-          const colaboradores=equipe.map(m=>({codigo:m.codigo||null, nome:m.nome}));
+          // 'foto' vai como data URL; enviarDocumento sobe para o bucket e troca por
+          // foto_path antes de chamar a função de registro.
+          const colaboradores=equipe.map(m=>({
+            codigo:m.codigo||null, nome:m.nome,
+            rubricado_em:m.rubricadoEm||null,
+            t_rel_ms:(m.tRelMs==null?null:m.tRelMs),
+            foto:m.foto||null }));
           const osNome=(osEfetiva||"sem_os").replace(/[^\w.-]+/g,"_");
           const localId="pt_"+desc.tipo+"_"+Date.now();
           const baseItem={ id:localId, tipo:"pt_"+desc.tipo, nome:"PT_"+desc.tipo+"_"+osNome+".pdf",
@@ -4078,7 +4448,8 @@ altura: {
           <button className="btn btn-blue" disabled={salvando} onClick={salvarEGerar}>{salvando?"Salvando...":"Salvar e gerar PDF"}</button>
         </div>
 
-        {rubricaIdx!==null && <RubricaModal onClose={()=>setRubricaIdx(null)} onSave={(d)=>{ setRubrica(rubricaIdx,d); setRubricaIdx(null); }} />}
+        {rubricaIdx!==null && <RubricaModal colaborador={equipe[rubricaIdx]}
+          onClose={()=>setRubricaIdx(null)} onSave={(d)=>{ setRubrica(rubricaIdx,d); setRubricaIdx(null); }} />}
         {qrModal && <QRModal url={qrModal.url} item={qrModal.item} onClose={()=>setQrModal(null)} />}
         {toast && <div className={"toast"+(toast.err?" err":"")}>{toast.msg}</div>}
       </div>);
