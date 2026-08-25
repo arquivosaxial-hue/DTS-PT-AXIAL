@@ -153,7 +153,7 @@
 
   <script type="text/babel">
     const { useState, useRef, useEffect } = React;
-    const APP_VERSION = "V7";
+    const APP_VERSION = "V9";
 
     // ===== CONFIG SUPABASE =====
     const SUPABASE_URL = "https://atbkjmvogkuekrcoevkn.supabase.co";
@@ -211,6 +211,13 @@
         { nome:"Contato com terra/adubo", nivel:"M", controle:["Manuseio correto","Higienização das mãos"], protecao:["Luvas","Botina"], suporte:["Treinamento"] },
         { nome:"Corte/perfuração (enxada, pá)", nivel:"B", controle:["Inspeção e uso correto da ferramenta"], protecao:["Luvas","Botina"], suporte:["Orientação de manuseio"] },
         { nome:"Exposição ao sol / calor", nivel:"B", controle:["Pausas e hidratação"], protecao:["Protetor solar","Vestimenta adequada","Touca árabe"], suporte:["Treinamento","DDS"] },
+      ]},
+      { id:"pintura", nome:"Pintura viária", riscos:[
+        { nome:"Atropelamento durante a pintura na faixa de rolamento", nivel:"A", controle:["Isolamento físico da faixa em pintura (cones em taper)","Bloqueio ou desvio do tráfego no trecho","Avanço no sentido do fluxo, de frente para o tráfego"], protecao:["Colete refletivo","Sinaleiro/bandeirinha","Veículo com giroflex a montante"], suporte:["Procedimento de sinalização viária","DDS","Supervisão"] },
+        { nome:"Contato da tinta/solvente com pele e olhos", nivel:"M", controle:["Abertura e transferência com funil/bandeja","Evitar respingo no acerto do traço"], protecao:["Luvas nitrílicas","Óculos de proteção","Manga comprida"], suporte:["Treinamento de manuseio de produto químico","FISPQ"] },
+        { nome:"Queda de mesmo nível / piso escorregadio com tinta fresca", nivel:"B", controle:["Manter a faixa recém-pintada isolada até secar","Latas e ferramentas fora do caminho"], protecao:["Botina","Atenção ao piso"], suporte:["Ordem e limpeza"] },
+        { nome:"Postura inadequada (aplicação agachado/curvado)", nivel:"B", controle:["Aplicador com cabo longo","Pausas e alternância de posição"], protecao:["Joelheira (quando aplicável)"], suporte:["Orientação ergonômica"] },
+        { nome:"Exposição ao sol / calor sobre o asfalto", nivel:"B", controle:["Pausas e hidratação","Programação nos horários menos quentes"], protecao:["Protetor solar","Vestimenta adequada","Touca árabe"], suporte:["Treinamento","DDS"] },
       ]},
       { id:"limpeza", nome:"Limpeza da área", riscos:[
         { nome:"Contato com resíduos / objetos perfurocortantes", nivel:"M", controle:["Recolhimento ordenado","Ferramentas adequadas (rodo, pá)"], protecao:["Luvas","Botina"], suporte:["Procedimento de limpeza e destinação de materiais"] },
