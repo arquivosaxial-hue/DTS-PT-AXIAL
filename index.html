@@ -160,7 +160,7 @@ const {
   useRef,
   useEffect
 } = React;
-const APP_VERSION = "V6";
+const APP_VERSION = "V7";
 
 // ===== CONFIG SUPABASE =====
 const SUPABASE_URL = "https://atbkjmvogkuekrcoevkn.supabase.co";
@@ -2890,24 +2890,67 @@ function acharColuna(cabecalho, nomes) {
   }
   return -1;
 }
+
+// Nomes que a coluna pode ter na planilha do RH. O arquivo real da Axial chama a
+// matrícula de "Funcionário" e o nome de "Nome do Funcionário" — nada parecido com
+// o "Código"/"Nome" que a gente esperava. Nomes novos entram nestas listas; o
+// administrador não deve ter que renomear coluna para importar.
+const COL_CODIGO = ["Código", "Codigo", "Matrícula", "Matricula", "Funcionário", "Funcionario", "Chapa", "Registro"];
+const COL_NOME = ["Nome do Funcionário", "Nome do Funcionario", "Nome Completo", "Nome", "Colaborador", "Funcionário Nome"];
+const COL_FUNCAO = ["Função", "Funcao", "Cargo", "Descrição do Cargo", "Descricao do Cargo"];
+const COL_SITUACAO = ["Situação", "Situacao", "Status"];
+
+// .xls e .xlsx são formatos binários. Lidos como texto viram caracteres de
+// controle e U+FFFD — foi o que apareceu na primeira tentativa de importar, um
+// borrão vermelho que não dizia o que fazer. Detectar dá para avisar direito.
+function pareceBinario(texto) {
+  const amostra = String(texto || "").slice(0, 2000);
+  if (!amostra) return false;
+  const ruins = (amostra.match(/[\u0000-\u0008\u000e-\u001f\ufffd]/g) || []).length;
+  return ruins > amostra.length * 0.05;
+}
 function lerPlanilhaEfetivo(texto) {
+  if (pareceBinario(texto)) return {
+    erro: "Isto é um arquivo .xls ou .xlsx, que é binário e não dá para ler como texto. " + "O jeito mais rápido: abra a planilha no Excel, selecione as células (Ctrl+A), " + "copie (Ctrl+C) e cole aqui no campo de texto. Não precisa salvar como CSV."
+  };
   const linhas = String(texto || "").replace(/\r/g, "").split("\n").filter(l => l.trim());
   if (linhas.length < 2) return {
     erro: "A planilha precisa do cabeçalho e ao menos uma linha."
   };
-  const sep = separadorDe(linhas[0]);
-  const cab = lerLinhaCSV(linhas[0], sep);
-  const iCod = acharColuna(cab, ["Código", "Codigo", "Matrícula", "Matricula"]);
-  const iNom = acharColuna(cab, ["Nome", "Colaborador"]);
-  const iFun = acharColuna(cab, ["Função", "Funcao", "Cargo"]);
-  const iSit = acharColuna(cab, ["Situação", "Situacao", "Status"]);
-  if (iCod < 0 || iNom < 0) return {
-    erro: "Não achei as colunas \"Código\" e \"Nome\" no cabeçalho. Encontrei: " + cab.join(" | ")
-  };
+
+  // O cabeçalho nem sempre é a primeira linha: exportação de RH costuma trazer
+  // título e data em cima. Procura nas 10 primeiras a linha que tem matrícula E nome.
+  let iCab = -1,
+    sep = ",",
+    iCod = -1,
+    iNom = -1,
+    iFun = -1,
+    iSit = -1;
+  for (let i = 0; i < Math.min(10, linhas.length); i++) {
+    const s = separadorDe(linhas[i]);
+    const c = lerLinhaCSV(linhas[i], s);
+    const cod = acharColuna(c, COL_CODIGO),
+      nom = acharColuna(c, COL_NOME);
+    if (cod >= 0 && nom >= 0) {
+      iCab = i;
+      sep = s;
+      iCod = cod;
+      iNom = nom;
+      iFun = acharColuna(c, COL_FUNCAO);
+      iSit = acharColuna(c, COL_SITUACAO);
+      break;
+    }
+  }
+  if (iCab < 0) {
+    const visto = lerLinhaCSV(linhas[0], separadorDe(linhas[0])).join(" | ").slice(0, 180);
+    return {
+      erro: "Não achei a coluna da matrícula e a do nome. Aceito \"Código\", " + "\"Matrícula\" ou \"Funcionário\" para a matrícula, e \"Nome\" ou " + "\"Nome do Funcionário\" para o nome. Primeira linha lida: " + visto
+    };
+  }
   const ok = [],
     ruins = [];
   const vistos = new Set();
-  for (let i = 1; i < linhas.length; i++) {
+  for (let i = iCab + 1; i < linhas.length; i++) {
     const c = lerLinhaCSV(linhas[i], sep);
     // Matrícula é TEXTO: '001104' com zeros à esquerda. Se o Excel tiver comido
     // os zeros, o vínculo com a planilha do RH quebra — e não há como adivinhar.
@@ -2931,6 +2974,9 @@ function lerPlanilhaEfetivo(texto) {
     vistos.add(codigo);
     const sitBruta = (iSit >= 0 ? c[iSit] || "" : "").toLowerCase();
     const situacao = /desligad|demitid|inativ/.test(sitBruta) ? "desligado" : /afastad|licen/.test(sitBruta) ? "afastado" : "ativo";
+    // Só três campos atravessam para o banco. A planilha do RH traz CPF, salário
+    // e admissão; nada disso tem serventia num documento de segurança, e coletar
+    // o que não se usa é o oposto do que a LGPD pede (ver 2.5).
     ok.push({
       codigo,
       nome,
@@ -3178,7 +3224,9 @@ function TelaEfetivo({
     className: "section"
   }, /*#__PURE__*/React.createElement("h2", null, "Importar planilha"), /*#__PURE__*/React.createElement("p", {
     className: "hint"
-  }, "No Excel: ", /*#__PURE__*/React.createElement("b", null, "Arquivo \u2192 Salvar como \u2192 CSV UTF-8"), ". Precisa ter as colunas", /*#__PURE__*/React.createElement("b", null, " C\xF3digo"), " e ", /*#__PURE__*/React.createElement("b", null, " Nome"), "; ", /*#__PURE__*/React.createElement("b", null, "Fun\xE7\xE3o"), " e ", /*#__PURE__*/React.createElement("b", null, "Situa\xE7\xE3o"), " entram se existirem. Tamb\xE9m d\xE1 para copiar as c\xE9lulas e colar no campo abaixo."), /*#__PURE__*/React.createElement("div", {
+  }, /*#__PURE__*/React.createElement("b", null, "Mais r\xE1pido:"), " abra a planilha no Excel, selecione tudo (Ctrl+A), copie (Ctrl+C) e cole no campo abaixo. Funciona direto com o arquivo ", /*#__PURE__*/React.createElement("b", null, ".xls"), " do RH, sem converter nada. Se preferir arquivo, salve antes como ", /*#__PURE__*/React.createElement("b", null, "CSV UTF-8"), " \u2014 o seletor abaixo n\xE3o l\xEA .xls, que \xE9 bin\xE1rio."), /*#__PURE__*/React.createElement("p", {
+    className: "hint"
+  }, "A coluna da matr\xEDcula pode se chamar ", /*#__PURE__*/React.createElement("b", null, "C\xF3digo"), ", ", /*#__PURE__*/React.createElement("b", null, "Matr\xEDcula"), " ou", /*#__PURE__*/React.createElement("b", null, " Funcion\xE1rio"), "; a do nome, ", /*#__PURE__*/React.createElement("b", null, "Nome"), " ou ", /*#__PURE__*/React.createElement("b", null, "Nome do Funcion\xE1rio"), ".", /*#__PURE__*/React.createElement("b", null, " Fun\xE7\xE3o"), " e ", /*#__PURE__*/React.createElement("b", null, "Situa\xE7\xE3o"), " entram se existirem.", /*#__PURE__*/React.createElement("b", null, " CPF, sal\xE1rio e data de admiss\xE3o s\xE3o ignorados"), " \u2014 o app n\xE3o guarda isso."), /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
       gap: 8,
@@ -3197,7 +3245,7 @@ function TelaEfetivo({
   })), /*#__PURE__*/React.createElement("textarea", {
     value: texto,
     onChange: e => setTexto(e.target.value),
-    placeholder: "Código;Nome;Função;Situação\n001104;Anderson de Souza;Pedreiro;Ativo",
+    placeholder: "Cole aqui as células copiadas do Excel.\n\nFuncionário\tNome do Funcionário\tFunção\n001104\tANDERSON DIAS DOS SANTOS\tPEDREIRO I",
     style: {
       width: "100%",
       minHeight: 90,
