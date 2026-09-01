@@ -160,7 +160,7 @@ const {
   useRef,
   useEffect
 } = React;
-const APP_VERSION = "V14";
+const APP_VERSION = "V15";
 
 // ===== CONFIG SUPABASE =====
 const SUPABASE_URL = "https://atbkjmvogkuekrcoevkn.supabase.co";
@@ -4583,6 +4583,48 @@ function PainelAdm({
     }
   }
 
+  // "permission denied for table X" é erro de GRANT, não de policy: a policy
+  // filtra linhas, não concede privilégio. Sem esta tradução o administrador lê
+  // uma mensagem do Postgres e não tem como saber o que fazer.
+  function explicarErro(e) {
+    const m = String(e && e.message || e);
+    if (/permission denied for table/i.test(m)) {
+      return m + " — falta o privilégio de exclusão no banco. Rode banco/06-exclusao-definitiva.sql.";
+    }
+    return m;
+  }
+
+  // ---- APAGAR UM ITEM DA LIXEIRA ----
+  // Mesma destruição do "Esvaziar", em um registro só. Aqui a confirmação é um
+  // confirm() nomeando o documento, não a digitação de APAGAR: a fricção tem que
+  // ser proporcional ao estrago, e um item identificado na tela é bem menor que
+  // um lote definido por filtro.
+  async function apagarDefinitivo(item) {
+    const desc = (item[cfg.colTitulo] || "(sem descrição)") + " — OS " + (item.numero_os || "-") + " — " + (item.data_atividade || (item.created_at || "").slice(0, 10));
+    if (!window.confirm("APAGAR DEFINITIVAMENTE este registro?\n\n" + desc + "\n\nO documento, a equipe, o PDF e as fotos serão apagados e NÃO poderão ser " + "recuperados. Se quiser apenas tirá-lo da lixeira, use \"Restaurar\".")) return;
+    setCarregando(true);
+    setMsg("");
+    try {
+      // as fotos precisam ser lidas ANTES: depois do delete, o caminho some junto
+      const {
+        data: eq
+      } = await supa.from(cfg.colab).select("foto_path").eq(cfg.fk, item.id);
+      const fotos = (eq || []).map(c => c.foto_path).filter(Boolean);
+      const {
+        error
+      } = await supa.from(cfg.tabela).delete().eq("id", item.id);
+      if (error) throw error;
+      if (item.pdf_path) await supa.storage.from("dts-pdfs").remove([item.pdf_path]);
+      if (fotos.length) await supa.storage.from("rubricas").remove(fotos);
+      setLista(l => l.filter(x => x.id !== item.id));
+      setMsg("Registro apagado definitivamente" + (item.pdf_path ? " (PDF removido)" : "") + (fotos.length ? " · " + fotos.length + " foto(s) removidas" : "") + ".");
+    } catch (e) {
+      setMsg("Erro ao apagar: " + explicarErro(e));
+    } finally {
+      setCarregando(false);
+    }
+  }
+
   // ---- ESVAZIAR A LIXEIRA (exclusão definitiva) ----
   // A única operação do app que destrói documento de segurança. Por isso:
   //   1) só existe DENTRO da lixeira — o registro já passou por uma exclusão antes;
@@ -4643,7 +4685,7 @@ function PainelAdm({
       setLista([]);
       setMsg(apagados + " registro(s) apagados definitivamente · " + pdfs.length + " PDF(s) e " + fotos.length + " foto(s) removidos" + (arquivosErro ? " · " + arquivosErro + " lote(s) de arquivo falharam — use \"Procurar PDFs órfãos\"" : "") + ".");
     } catch (e) {
-      setMsg("Erro ao esvaziar a lixeira: " + e.message);
+      setMsg("Erro ao esvaziar a lixeira: " + explicarErro(e));
     } finally {
       setCarregando(false);
     }
@@ -5855,7 +5897,7 @@ function PainelAdm({
     style: {
       color: "#A32D2D"
     }
-  }, "\"Esvaziar lixeira\" apaga de vez"), " \u2014 registros, PDFs e fotos, sem recupera\xE7\xE3o. Confira os filtros antes.") : /*#__PURE__*/React.createElement("p", {
+  }, "\"Apagar\" e \"Esvaziar lixeira\" apagam de vez"), " \u2014 registro, PDF e fotos, sem recupera\xE7\xE3o. O primeiro age num item; o segundo, em tudo o que os filtros est\xE3o mostrando.") : /*#__PURE__*/React.createElement("p", {
     style: {
       fontSize: 12,
       color: "#999",
@@ -6026,7 +6068,7 @@ function PainelAdm({
     },
     title: "Quem assinou, a que horas e com que intervalo",
     onClick: () => setEquipeAberta(x => x === item.id ? null : item.id)
-  }, equipeAberta === item.id ? "Ocultar equipe" : "Ver equipe"), verLixeira ? /*#__PURE__*/React.createElement("button", {
+  }, equipeAberta === item.id ? "Ocultar equipe" : "Ver equipe"), verLixeira ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("button", {
     style: {
       fontSize: 13,
       padding: "7px 10px",
@@ -6038,7 +6080,21 @@ function PainelAdm({
     },
     onClick: () => restaurar(item),
     title: "Tirar da lixeira e voltar \xE0s listagens"
-  }, "Restaurar") : /*#__PURE__*/React.createElement("button", {
+  }, "Restaurar"), /*#__PURE__*/React.createElement("button", {
+    disabled: carregando,
+    style: {
+      fontSize: 13,
+      padding: "7px 10px",
+      borderRadius: 8,
+      border: "1px solid #A32D2D",
+      background: "#A32D2D",
+      color: "#fff",
+      cursor: carregando ? "default" : "pointer",
+      opacity: carregando ? .55 : 1
+    },
+    onClick: () => apagarDefinitivo(item),
+    title: "Exclus\xE3o definitiva deste registro: documento, PDF e fotos. N\xE3o tem volta."
+  }, "Apagar")) : /*#__PURE__*/React.createElement("button", {
     style: {
       fontSize: 13,
       padding: "7px 10px",
