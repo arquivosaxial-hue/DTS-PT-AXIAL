@@ -153,7 +153,7 @@
 
   <script type="text/babel">
     const { useState, useRef, useEffect } = React;
-    const APP_VERSION = "V10";
+    const APP_VERSION = "V12";
 
     // ===== CONFIG SUPABASE =====
     const SUPABASE_URL = "https://atbkjmvogkuekrcoevkn.supabase.co";
@@ -2168,6 +2168,89 @@
       </div>);
     }
 
+    // Monta o índice offline. Fica fora do componente porque é função pura: recebe
+    // dados, devolve texto. Os dados vão como JSON dentro do próprio arquivo, então
+    // ele funciona sem servidor, sem internet e daqui a cinco anos.
+    function montarHtmlIndice(pessoas, periodo, rotulo, totalDocs, semEquipe, nomePdf){
+      const esc=(s)=>String(s==null?"":s)
+        .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")
+        .replace(/"/g,"&quot;");
+      // Escapar o "<" dos dados: sem isso, um "menor que" vindo do banco poderia
+      // fechar a tag de script do arquivo gerado no meio do JSON.
+      const dados=JSON.stringify(pessoas).replace(/</g,"\\u003c");
+      return "<!doctype html>\n"
++"<html lang=\"pt-BR\"><head><meta charset=\"utf-8\">"
++"<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
++"<title>Índice por colaborador — "+esc(rotulo)+" — "+esc(periodo)+"</title><style>"
++"*{box-sizing:border-box}body{margin:0;font:15px/1.5 system-ui,Segoe UI,Arial,sans-serif;color:#222;background:#f5f6f8}"
++".topo{background:#1B3A6B;color:#fff;padding:18px 22px}.topo h1{margin:0;font-size:19px}"
++".topo p{margin:5px 0 0;font-size:13px;color:#c8d8ee}"
++".corpo{display:flex;gap:16px;padding:16px;flex-wrap:wrap;align-items:flex-start}"
++".lado{flex:0 0 300px;background:#fff;border:1px solid #e3e6ea;border-radius:10px;padding:10px;max-height:78vh;overflow:auto}"
++".lado input{width:100%;padding:9px;border:1px solid #ccc;border-radius:8px;font-size:14px;margin-bottom:8px}"
++".pessoa{padding:9px 10px;border-radius:8px;cursor:pointer;border-bottom:1px solid #f1f1f1}"
++".pessoa:hover{background:#f3f7fc}.pessoa.sel{background:#1B3A6B;color:#fff}"
++".pessoa b{display:block;font-size:14px}.pessoa span{font-size:12px;opacity:.75}"
++".painel{flex:1;min-width:340px;background:#fff;border:1px solid #e3e6ea;border-radius:10px;padding:16px}"
++"table{width:100%;border-collapse:collapse;font-size:13px}"
++"th{text-align:left;color:#666;font-weight:600;border-bottom:2px solid #eee;padding:7px 6px;font-size:12px}"
++"td{padding:7px 6px;border-bottom:1px solid #f2f2f2;vertical-align:top}"
++".vazio{color:#888;padding:26px 0;text-align:center}"
++".resumo{background:#f7fafd;border:1px solid #dbe6f2;border-radius:8px;padding:10px 12px;margin-bottom:12px;font-size:13px}"
++".ver{color:#1B3A6B;font-weight:600;text-decoration:none;white-space:nowrap}.ver:hover{text-decoration:underline}"
++".aviso{background:#FFF6E5;border:1px solid #E7C77A;color:#7A5510;border-radius:8px;padding:9px 12px;margin:0 16px;font-size:12.5px}"
++"@media print{.lado{display:none}.painel{border:0}}"
++"</style></head><body>"
++"<div class=\"topo\"><h1>Índice por colaborador — "+esc(rotulo)+"</h1>"
++"<p>Período "+esc(periodo)+" · "+totalDocs+" documento(s) · "+pessoas.length+" colaborador(es)"
++(semEquipe?(" · "+semEquipe+" documento(s) sem equipe registrada"):"")+"</p></div>"
++(nomePdf ? ("<div class=\"aviso\">Para os links abrirem, mantenha este arquivo <b>na mesma pasta</b> que <b>"
+   +esc(nomePdf)+"</b>. Se o navegador não pular para a página, o número dela está escrito no link.</div>") : "")
++"<div class=\"corpo\"><div class=\"lado\">"
++"<input id=\"busca\" placeholder=\"Buscar nome ou matrícula\">"
++"<div id=\"lista\"></div></div>"
++"<div class=\"painel\" id=\"painel\"><div class=\"vazio\">Clique num nome à esquerda para ver os serviços em que a pessoa trabalhou.</div></div>"
++"</div><script>\n"
++"var PESSOAS="+dados+";\n"
++"var PDF="+JSON.stringify(nomePdf||null)+";\n"
++"var sel=null;\n"
++"// Nome de colaborador pode ser digitado à mão em campo. Sem escapar, um nome\n"
++"// com HTML dentro viraria markup — ou script — no arquivo que o jurídico abre.\n"
++"function E(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;')\n"
++"  .replace(/>/g,'&gt;').replace(/\"/g,'&quot;'); }\n"
++"function desenharLista(){\n"
++"  var q=(document.getElementById('busca').value||'').toLowerCase().trim();\n"
++"  var alvo=document.getElementById('lista'); alvo.innerHTML='';\n"
++"  PESSOAS.filter(function(p){ return !q || (p.nome||'').toLowerCase().indexOf(q)>=0 || (p.codigo||'').toLowerCase().indexOf(q)>=0; })\n"
++"  .forEach(function(p,i){\n"
++"    var d=document.createElement('div'); d.className='pessoa'+(sel===p?' sel':'');\n"
++"    d.innerHTML='<b>'+E(p.nome)+'</b><span>'+(p.codigo?('Mat. '+E(p.codigo)):'sem matrícula')+' · '+p.docs.length+' documento(s)</span>';\n"
++"    d.onclick=function(){ sel=p; desenharLista(); mostrar(p); };\n"
++"    alvo.appendChild(d);\n"
++"  });\n"
++"}\n"
++"function mostrar(p){\n"
++"  var comFoto=p.docs.filter(function(d){return d.comFoto;}).length;\n"
++"  var h='<div class=\"resumo\"><b>'+E(p.nome)+'</b>'+(p.codigo?(' · matrícula '+E(p.codigo)):' · sem matrícula')\n"
++"    +'<br>'+p.docs.length+' documento(s) no período · '+comFoto+' com registro fotográfico</div>';\n"
++"  h+='<table><tr><th>Data</th><th>OS</th><th>Serviço</th><th>Local</th><th>Responsável</th><th>Hora</th>'+(PDF?'<th>Documento</th>':'')+'</tr>';\n"
++"  p.docs.slice().sort(function(a,b){return (a.data||'').localeCompare(b.data||'');}).forEach(function(d){\n"
++"    var hora=d.hora?new Date(d.hora).toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'}):'';\n"
++"    h+='<tr><td>'+E(d.data)+'</td><td>'+E(d.os)+'</td><td>'+E(d.servico)+(d.tipo?(' ('+E(d.tipo)+')'):'')\n"
++"      +'</td><td>'+E(d.local)+'</td><td>'+E(d.lider)+'</td><td>'+E(hora)+'</td>';\n"
++"    if(PDF){\n"
++"      h+= d.pagina ? ('<td><a class=\"ver\" href=\"'+E(PDF)+'#page='+d.pagina+'\" target=\"_blank\">abrir · pág. '+d.pagina+'</a></td>')\n"
++"                   : '<td style=\"color:#aaa\">sem PDF</td>';\n"
++"    }\n"
++"    h+='</tr>';\n"
++"  });\n"
++"  document.getElementById('painel').innerHTML=h+'</table>';\n"
++"}\n"
++"document.getElementById('busca').oninput=desenharLista;\n"
++"desenharLista();\n"
++"<\/script></body></html>";
+    }
+
     function PainelAdm({ onVoltar, cfg=CFG_DTS }) {
       // Autenticacao de verdade: quem manda e a sessao do Supabase, nao uma senha
       // comparada no navegador. Sem sessao valida, o banco recusa a leitura — mesmo
@@ -2546,6 +2629,260 @@
         }catch(e){ alert("Erro ao abrir: "+e.message); }
       }
 
+      function baixarArquivo(blob, nome){
+        const url=URL.createObjectURL(blob);
+        const a=document.createElement("a"); a.href=url; a.download=nome;
+        document.body.appendChild(a); a.click(); document.body.removeChild(a);
+        // o revoke imediato cancela o download em alguns navegadores
+        setTimeout(()=>URL.revokeObjectURL(url), 30000);
+      }
+
+      // Busca a equipe de vários documentos de uma vez. Uma consulta por lote em
+      // vez de uma por documento: com 440 DTS no mês, o segundo jeito seriam 440
+      // idas ao servidor e o relatório levaria minutos.
+      async function equipesDe(itens){
+        const mapa={};
+        for(let i=0;i<itens.length;i+=200){
+          const ids=itens.slice(i,i+200).map(x=>x.id);
+          const { data, error }=await supa.from(cfg.colab)
+            .select("codigo,nome,ordem,rubricado_em,foto_path,"+cfg.fk)
+            .in(cfg.fk, ids).order("ordem");
+          if(error) throw error;
+          (data||[]).forEach(l=>{ (mapa[l[cfg.fk]] = mapa[l[cfg.fk]] || []).push(l); });
+        }
+        return mapa;
+      }
+
+      // ---- RELATÓRIO COM FOTOS ----
+      // Documento SEPARADO do que vai para a Iguá, de propósito. Poderia ser uma
+      // caixinha "incluir fotos" no botão existente, mas aí um clique errado manda
+      // rosto de trabalhador para fora da empresa. Dois botões distintos tornam isso
+      // um ato deliberado, não um descuido.
+      async function baixarComFotos(){
+        const comPdf=lista.filter(i=>i.pdf_path);
+        if(!comPdf.length){ alert("Nenhum documento com PDF no período."); return; }
+        setCarregando(true); setMsg("");
+        const t0=Date.now();
+        setProg({feitos:0,total:comPdf.length,restante:null});
+        try{
+          const { PDFDocument, StandardFonts, rgb }=PDFLib;
+          const equipes=await equipesDe(comPdf);
+          const unificado=await PDFDocument.create();
+          const fonte=await unificado.embedFont(StandardFonts.Helvetica);
+          const fonteN=await unificado.embedFont(StandardFonts.HelveticaBold);
+          let ok=0, falhas=0, semFoto=0, processados=0;
+
+          for(const item of comPdf){
+            try{
+              const { data, error }=await supa.storage.from("dts-pdfs").download(item.pdf_path);
+              if(error) throw error;
+              const doc=await PDFDocument.load(await data.arrayBuffer());
+              const pgs=await unificado.copyPages(doc, doc.getPageIndices());
+              pgs.forEach(x=>unificado.addPage(x));
+
+              // a folha de fotos vem logo DEPOIS do documento a que pertence
+              const equipe=equipes[item.id]||[];
+              const pg=unificado.addPage([595.28, 841.89]);
+              const A=841.89;
+              pg.drawText("REGISTRO FOTOGRÁFICO DA EQUIPE", { x:50, y:A-60, size:14, font:fonteN, color:rgb(0.1,0.23,0.42) });
+              pg.drawText(cfg.rotulo+"  ·  OS "+(item.numero_os||"-")
+                +"  ·  "+(item.data_atividade||(item.created_at||"").slice(0,10)),
+                { x:50, y:A-80, size:10, font:fonte, color:rgb(0.35,0.35,0.35) });
+              pg.drawText(String(item[cfg.colTitulo]||"").slice(0,90),
+                { x:50, y:A-95, size:10, font:fonte, color:rgb(0.35,0.35,0.35) });
+              pg.drawLine({ start:{x:50,y:A-105}, end:{x:545,y:A-105}, thickness:0.8, color:rgb(0.8,0.8,0.8) });
+
+              // grade 3 x 4: 12 fotos por página basta para a equipe de uma frente
+              const COL=3, LARG=160, ALT=150, X0=50, Y0=A-125;
+              for(let k=0;k<equipe.length;k++){
+                const c=equipe[k];
+                const col=k%COL, lin=Math.floor(k/COL);
+                const x=X0+col*(LARG+8), y=Y0-lin*(ALT+18);
+                if(y<80) break;                       // não cabe mais nesta página
+                let desenhou=false;
+                if(c.foto_path){
+                  try{
+                    const { data:img }=await supa.storage.from("rubricas").download(c.foto_path);
+                    if(img){
+                      const jpg=await unificado.embedJpg(await img.arrayBuffer());
+                      const esc=Math.min(LARG/jpg.width, (ALT-34)/jpg.height);
+                      pg.drawImage(jpg, { x, y:y-jpg.height*esc, width:jpg.width*esc, height:jpg.height*esc });
+                      desenhou=true;
+                    }
+                  }catch(_){ /* foto ilegível: cai no aviso abaixo */ }
+                }
+                if(!desenhou){
+                  semFoto++;
+                  pg.drawRectangle({ x, y:y-(ALT-34), width:LARG, height:ALT-34,
+                    borderColor:rgb(0.85,0.85,0.85), borderWidth:0.8 });
+                  pg.drawText("sem foto", { x:x+LARG/2-20, y:y-(ALT-34)/2, size:9, font:fonte, color:rgb(0.65,0.65,0.65) });
+                }
+                const base=y-(ALT-34)-12;
+                pg.drawText(String(c.nome||"").slice(0,26), { x, y:base, size:8.5, font:fonteN, color:rgb(0.1,0.1,0.1) });
+                pg.drawText((c.codigo?("Mat. "+c.codigo):"sem matrícula")
+                  +(c.rubricado_em?("  ·  "+new Date(c.rubricado_em).toLocaleTimeString("pt-BR",{hour:"2-digit",minute:"2-digit"})):""),
+                  { x, y:base-10, size:7.5, font:fonte, color:rgb(0.45,0.45,0.45) });
+              }
+              if(!equipe.length){
+                pg.drawText("Nenhum colaborador registrado neste documento.",
+                  { x:50, y:A-150, size:10, font:fonte, color:rgb(0.55,0.55,0.55) });
+              }
+              ok++;
+            }catch(e){ falhas++; console.warn("falha em",item.pdf_path,e.message); }
+            processados++;
+            const medio=(Date.now()-t0)/processados;
+            const faltam=comPdf.length-processados;
+            setProg({feitos:processados,total:comPdf.length,restante:faltam?Math.round(medio*faltam/1000):0});
+            await new Promise(r=>setTimeout(r,0));
+          }
+          if(!ok){ setMsg("Não foi possível montar o relatório."); return; }
+          const blob=new Blob([await unificado.save()],{type:"application/pdf"});
+          const url=URL.createObjectURL(blob);
+          const periodo=(de||"inicio")+"_a_"+(ate||"hoje");
+          const a=document.createElement("a"); a.href=url;
+          a.download=cfg.prefixo+"_COM_FOTOS_"+periodo+".pdf";
+          document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
+          setMsg("Relatório com fotos: "+ok+" documento(s)"
+            +(falhas?(", "+falhas+" falharam"):"")
+            +(semFoto?(", "+semFoto+" colaborador(es) sem foto"):"")+".");
+        }catch(e){ setMsg("Erro ao montar o relatório com fotos: "+e.message); }
+        finally{ setCarregando(false); setProg(null); }
+      }
+
+      // ---- ÍNDICE POR COLABORADOR (HTML offline) ----
+      // Um arquivo só, que abre em qualquer navegador sem internet: a lista de quem
+      // trabalhou no período e, clicando no nome, tudo o que a pessoa assinou. É o
+      // que responde "o que o 001104 fez em março?" anos depois, em segundos.
+      //
+      // Não embute os PDFs de propósito: a 440 documentos por mês seriam ~420 MB
+      // num arquivo só, que trava o navegador. O índice pesa alguns KB e diz qual
+      // documento buscar; o PDF continua no acervo.
+      async function baixarIndiceColaborador(){
+        setCarregando(true); setMsg("");
+        try{
+          const montar=()=>{
+            let q=supa.from(cfg.tabela).select(cfg.select).is("excluido_em",null)
+                     .order("data_atividade",{ascending:true}).order("id",{ascending:true});
+            return aplicarFiltros(q);
+          };
+          const docs=await buscarTudo(montar);
+          if(!docs || !docs.length){ setMsg("Nada a exportar com os filtros atuais."); return; }
+          const equipes=await equipesDe(docs);
+
+          // uma linha por pessoa por documento
+          const pessoas={};
+          let semEquipe=0;
+          for(const d of docs){
+            const eq=equipes[d.id]||[];
+            if(!eq.length){ semEquipe++; continue; }
+            for(const c of eq){
+              const chave=c.codigo||("nome:"+(c.nome||"").toLowerCase());
+              const pe=pessoas[chave]||(pessoas[chave]={ codigo:c.codigo||null, nome:c.nome||"(sem nome)", docs:[] });
+              pe.docs.push({
+                data:d.data_atividade||(d.created_at||"").slice(0,10),
+                os:d.numero_os||"", servico:d[cfg.colTitulo]||"",
+                local:d[cfg.colLocal]||"", lider:d[cfg.colLider]||"",
+                tipo:d.tipo||"", hora:c.rubricado_em||"", comFoto:!!c.foto_path,
+              });
+            }
+          }
+          const lista2=Object.values(pessoas).sort((a,b)=>a.nome.localeCompare(b.nome,"pt-BR"));
+          const periodo=(de||"início")+" a "+(ate||"hoje");
+          const html=montarHtmlIndice(lista2, periodo, cfg.rotulo, docs.length, semEquipe);
+          const blob=new Blob([html],{type:"text/html;charset=utf-8"});
+          const url=URL.createObjectURL(blob);
+          const a=document.createElement("a"); a.href=url;
+          a.download="indice_"+cfg.prefixo.toLowerCase()+"_"+(de||"inicio")+"_a_"+(ate||"hoje")+".html";
+          document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
+          setMsg("Índice gerado: "+lista2.length+" colaborador(es) em "+docs.length+" documento(s)."
+            +(semEquipe?(" "+semEquipe+" documento(s) sem equipe ficaram de fora."):""));
+        }catch(e){ setMsg("Erro ao gerar o índice: "+e.message); }
+        finally{ setCarregando(false); }
+      }
+
+      // ---- PACOTE DO MÊS: índice navegável + PDF único, ligados por página ----
+      // Gera os dois juntos DE PROPÓSITO: é a única forma de o número da página no
+      // índice bater com o PDF. Gerar em momentos diferentes, com filtros diferentes,
+      // produziria um índice que aponta para a página errada — pior que não ter link.
+      //
+      // Não existe versão "tudo num arquivo só": medi, e o pdf-lib não reaproveita o
+      // modelo em branco entre documentos (978 KB por DTS, sempre). Embutir 440 PDFs
+      // no HTML daria ~560 MB em base64 e travaria o navegador. Dois arquivos na mesma
+      // pasta resolvem sem nenhum truque.
+      async function baixarPacoteMes(){
+        setCarregando(true); setMsg("");
+        const t0=Date.now();
+        try{
+          const montar=()=>{
+            let q=supa.from(cfg.tabela).select(cfg.select).is("excluido_em",null)
+                     .order("data_atividade",{ascending:true}).order("id",{ascending:true});
+            return aplicarFiltros(q);
+          };
+          const docs=await buscarTudo(montar);
+          if(!docs || !docs.length){ setMsg("Nada a exportar com os filtros atuais."); return; }
+          const equipes=await equipesDe(docs);
+
+          const base=cfg.prefixo+"_"+(de||"inicio")+"_a_"+(ate||"hoje");
+          const nomePdf=base+".pdf";
+
+          const { PDFDocument }=PDFLib;
+          const unificado=await PDFDocument.create();
+          const pagina={};                 // id do documento -> página em que começa
+          let ok=0, falhas=0, processados=0;
+          setProg({feitos:0,total:docs.length,restante:null});
+
+          for(const item of docs){
+            if(item.pdf_path){
+              try{
+                const { data, error }=await supa.storage.from("dts-pdfs").download(item.pdf_path);
+                if(error) throw error;
+                const doc=await PDFDocument.load(await data.arrayBuffer());
+                pagina[item.id]=unificado.getPageCount()+1;   // 1-based, como o leitor mostra
+                const pgs=await unificado.copyPages(doc, doc.getPageIndices());
+                pgs.forEach(x=>unificado.addPage(x));
+                ok++;
+              }catch(e){ falhas++; console.warn("falha em",item.pdf_path,e.message); }
+            }
+            processados++;
+            const medio=(Date.now()-t0)/processados;
+            const faltam=docs.length-processados;
+            setProg({feitos:processados,total:docs.length,restante:faltam?Math.round(medio*faltam/1000):0});
+            await new Promise(r=>setTimeout(r,0));
+          }
+
+          // o índice, agora com a página de cada documento
+          const pessoas={};
+          let semEquipe=0;
+          for(const d of docs){
+            const eq=equipes[d.id]||[];
+            if(!eq.length){ semEquipe++; continue; }
+            for(const c of eq){
+              const chave=c.codigo||("nome:"+(c.nome||"").toLowerCase());
+              const pe=pessoas[chave]||(pessoas[chave]={ codigo:c.codigo||null, nome:c.nome||"(sem nome)", docs:[] });
+              pe.docs.push({
+                data:d.data_atividade||(d.created_at||"").slice(0,10),
+                os:d.numero_os||"", servico:d[cfg.colTitulo]||"",
+                local:d[cfg.colLocal]||"", lider:d[cfg.colLider]||"",
+                tipo:d.tipo||"", hora:c.rubricado_em||"", comFoto:!!c.foto_path,
+                pagina:pagina[d.id]||null,
+              });
+            }
+          }
+          const lista2=Object.values(pessoas).sort((a,b)=>a.nome.localeCompare(b.nome,"pt-BR"));
+          const periodo=(de||"início")+" a "+(ate||"hoje");
+          const html=montarHtmlIndice(lista2, periodo, cfg.rotulo, docs.length, semEquipe, nomePdf);
+
+          baixarArquivo(new Blob([html],{type:"text/html;charset=utf-8"}), base+".html");
+          if(ok) baixarArquivo(new Blob([await unificado.save()],{type:"application/pdf"}), nomePdf);
+
+          setMsg("Pacote gerado: "+base+".html + "+nomePdf+" — "+lista2.length+" colaborador(es), "
+            +ok+" documento(s)"+(falhas?(", "+falhas+" sem PDF"):"")
+            +(semEquipe?(", "+semEquipe+" sem equipe"):"")
+            +". Guarde os dois na MESMA pasta.");
+        }catch(e){ setMsg("Erro ao montar o pacote: "+e.message); }
+        finally{ setCarregando(false); setProg(null); }
+      }
+
       async function baixarTodos(){
         const comPdf=lista.filter(i=>i.pdf_path);
         if(!comPdf.length){ alert("Nenhum PDF disponível para baixar."); return; }
@@ -2808,7 +3145,22 @@
               title="Uma linha por colaborador por documento — matrícula, data, OS e serviço">
               Relatório por colaborador (CSV)
             </button>
-            {lista.length>0 && <button className="btn btn-light" onClick={baixarTodos}>Baixar todos (PDF único)</button>}
+            {lista.length>0 && <button className="btn btn-light" onClick={baixarTodos}
+              title="Só os documentos oficiais, sem fotos — é este que vai para a Iguá">
+              Baixar todos (PDF único)</button>}
+            {lista.length>0 && <button onClick={baixarComFotos} disabled={carregando}
+              title="Cada documento seguido de uma folha com as fotos da equipe. Uso interno."
+              style={{padding:"11px 16px",borderRadius:8,border:"1px solid #7A5510",background:"#FFF6E5",
+                      color:"#7A5510",fontSize:14,fontWeight:600,cursor:"pointer"}}>
+              Relatório com fotos (interno)</button>}
+            <button className="btn btn-light" onClick={baixarIndiceColaborador} disabled={carregando}
+              title="Só o índice, alguns KB: clique no nome e veja tudo o que a pessoa assinou">
+              Índice por colaborador</button>
+            <button onClick={baixarPacoteMes} disabled={carregando}
+              title="Índice + PDF do período, ligados: clicar no serviço abre o documento na página certa"
+              style={{padding:"11px 16px",borderRadius:8,border:"1px solid #0C447C",background:"#E6F1FB",
+                      color:"#0C447C",fontSize:14,fontWeight:600,cursor:"pointer"}}>
+              Pacote do período (índice + documentos)</button>
             {!verLixeira && (
               <button onClick={excluirPeriodo} disabled={carregando}
                 style={{padding:"11px 16px",borderRadius:8,border:"1px solid #A32D2D",background:"#fff",color:"#A32D2D",fontSize:14,fontWeight:600,cursor:"pointer"}}>
