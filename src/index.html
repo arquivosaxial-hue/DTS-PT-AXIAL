@@ -153,7 +153,7 @@
 
   <script type="text/babel">
     const { useState, useRef, useEffect } = React;
-    const APP_VERSION = "V12";
+    const APP_VERSION = "V13";
 
     // ===== CONFIG SUPABASE =====
     const SUPABASE_URL = "https://atbkjmvogkuekrcoevkn.supabase.co";
@@ -2251,6 +2251,35 @@
 +"<\/script></body></html>";
     }
 
+    // Botão de ação do painel. Existe para os botões pararem de ser cada um de um
+    // jeito: antes havia cinco estilos inline diferentes lado a lado.
+    function Acao({ children, onClick, disabled, cor, fundo, borda, dica }){
+      return (
+        <button onClick={onClick} disabled={disabled} title={dica||undefined}
+          style={{padding:"9px 14px",borderRadius:8,
+                  border:"1px solid "+(borda||cor||"#ccd2d8"),
+                  background:fundo||"#fff", color:cor||"#44505c",
+                  fontSize:13.5,fontWeight:600,cursor:disabled?"default":"pointer",
+                  opacity:disabled?.55:1}}>
+          {children}
+        </button>
+      );
+    }
+
+    // Agrupa ações sob um rótulo. Com onze botões numa linha só, ninguém achava
+    // o que procurava — e o de apagar ficava do lado do de baixar.
+    function Secao({ titulo, nota, children }){
+      return (
+        <div style={{marginTop:14}}>
+          <div style={{display:"flex",alignItems:"baseline",gap:8,margin:"0 0 7px"}}>
+            <span style={{fontSize:11,fontWeight:700,letterSpacing:.8,color:"#8a95a1",textTransform:"uppercase"}}>{titulo}</span>
+            {nota && <span style={{fontSize:11.5,color:"#aab2bb"}}>{nota}</span>}
+          </div>
+          <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>{children}</div>
+        </div>
+      );
+    }
+
     function PainelAdm({ onVoltar, cfg=CFG_DTS }) {
       // Autenticacao de verdade: quem manda e a sessao do Supabase, nao uma senha
       // comparada no navegador. Sem sessao valida, o banco recusa a leitura — mesmo
@@ -2587,6 +2616,67 @@
           setLista(data||[]);
           if(!data || !data.length) setMsg(naLixeira ? "A lixeira está vazia no período." : "Nenhum registro encontrado no período.");
         }catch(e){ setMsg("Erro: "+e.message); }
+        finally{ setCarregando(false); }
+      }
+
+      // ---- ESVAZIAR A LIXEIRA (exclusão definitiva) ----
+      // A única operação do app que destrói documento de segurança. Por isso:
+      //   1) só existe DENTRO da lixeira — o registro já passou por uma exclusão antes;
+      //   2) respeita os filtros da tela, como todo o resto (aplicarFiltros);
+      //   3) exige digitar APAGAR, porque um "OK" no susto é fácil demais;
+      //   4) apaga o registro ANTES dos arquivos. Se a ordem fosse inversa e o banco
+      //      falhasse, sobraria documento apontando para um PDF que não existe mais —
+      //      pior do que arquivo órfão, que o "Procurar PDFs órfãos" ainda acha.
+      // Os colaboradores somem junto por cascade da chave estrangeira.
+      async function esvaziarLixeira(){
+        setCarregando(true); setMsg("");
+        try{
+          const montar=()=>{
+            const sel = colabFiltro.trim()
+              ? "id,pdf_path,"+cfg.colab+"!inner(codigo,nome,foto_path)"
+              : "id,pdf_path,"+cfg.colab+"(foto_path)";
+            let q=supa.from(cfg.tabela).select(sel).not("excluido_em","is",null);
+            return aplicarFiltros(q);
+          };
+          const alvos=await buscarTudo(montar);
+          if(!alvos || !alvos.length){ setMsg("A lixeira está vazia com os filtros atuais."); return; }
+
+          const conf=window.prompt(
+            "EXCLUSÃO DEFINITIVA de "+alvos.length+" registro(s) da lixeira.\n\n"
+            +"Filtros em vigor: "+resumoFiltros()+"\n\n"
+            +"Os documentos, as equipes, os PDFs e as fotos serão apagados e NÃO poderão ser "
+            +"recuperados de nenhuma forma.\n\n"
+            +"Para confirmar, digite APAGAR:");
+          if(conf===null) return;
+          if(conf.trim().toUpperCase()!=="APAGAR"){ setMsg("Exclusão cancelada — o texto não confere."); return; }
+
+          const pdfs=alvos.filter(a=>a.pdf_path).map(a=>a.pdf_path);
+          const fotos=[];
+          alvos.forEach(a=>(a[cfg.colab]||[]).forEach(c=>{ if(c.foto_path) fotos.push(c.foto_path); }));
+          const ids=alvos.map(a=>a.id);
+
+          let apagados=0;
+          for(let i=0;i<ids.length;i+=200){
+            const { error }=await supa.from(cfg.tabela).delete().in("id", ids.slice(i,i+200));
+            if(error) throw error;
+            apagados+=Math.min(200, ids.length-i);
+          }
+          // arquivos depois: falha aqui vira lixo recuperável, não documento quebrado
+          let arquivosErro=0;
+          for(let i=0;i<pdfs.length;i+=100){
+            const { error }=await supa.storage.from("dts-pdfs").remove(pdfs.slice(i,i+100));
+            if(error) arquivosErro++;
+          }
+          for(let i=0;i<fotos.length;i+=100){
+            const { error }=await supa.storage.from("rubricas").remove(fotos.slice(i,i+100));
+            if(error) arquivosErro++;
+          }
+
+          setLista([]);
+          setMsg(apagados+" registro(s) apagados definitivamente · "+pdfs.length+" PDF(s) e "
+            +fotos.length+" foto(s) removidos"
+            +(arquivosErro?(" · "+arquivosErro+" lote(s) de arquivo falharam — use \"Procurar PDFs órfãos\""):"")+".");
+        }catch(e){ setMsg("Erro ao esvaziar a lixeira: "+e.message); }
         finally{ setCarregando(false); }
       }
 
@@ -3035,16 +3125,27 @@
       if(verEfetivo) return <TelaEfetivo onVoltar={()=>setVerEfetivo(false)} />;
 
       return (<div style={{maxWidth:760,margin:"0 auto",padding:16,background:"#fff",minHeight:"100vh"}}>
-        <div className="header" style={{borderRadius:10}}>
-          <h1>Painel administrativo — {cfg.rotulo}</h1>
-          <p>Construtora Axial · relatórios por período</p>
-          <p style={{margin:"6px 0 0",fontSize:12,color:"#B5D4F4"}}>
-            {sessao.user.email}
-            <a onClick={()=>{ setTrocando(v=>!v); setMsgSenha(""); }}
-              style={{marginLeft:10,color:"#fff",cursor:"pointer",textDecoration:"underline"}}>alterar senha</a>
-            <a onClick={()=>setVerEfetivo(true)} style={{marginLeft:10,color:"#fff",cursor:"pointer",textDecoration:"underline"}}>efetivo</a>
-            <a onClick={sair} style={{marginLeft:10,color:"#fff",cursor:"pointer",textDecoration:"underline"}}>sair</a>
-          </p>
+        <div className="header" style={{borderRadius:10,paddingBottom:14}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:12,flexWrap:"wrap"}}>
+            <div>
+              <h1 style={{marginBottom:2}}>Painel administrativo</h1>
+              <p style={{margin:0}}>
+                <span style={{background:"rgba(255,255,255,.18)",padding:"2px 9px",borderRadius:20,
+                              fontWeight:700,fontSize:12,letterSpacing:.4}}>{cfg.rotulo}</span>
+                <span style={{marginLeft:8,opacity:.9}}>Construtora Axial</span>
+              </p>
+            </div>
+            <div style={{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center"}}>
+              {[["efetivo",()=>setVerEfetivo(true)],
+                ["alterar senha",()=>{ setTrocando(v=>!v); setMsgSenha(""); }],
+                ["sair",sair]].map(([rot,fn])=>(
+                <a key={rot} onClick={fn}
+                  style={{color:"#fff",cursor:"pointer",fontSize:12,fontWeight:600,
+                          border:"1px solid rgba(255,255,255,.45)",borderRadius:20,padding:"4px 11px"}}>{rot}</a>
+              ))}
+            </div>
+          </div>
+          <p style={{margin:"10px 0 0",fontSize:11.5,color:"#B5D4F4"}}>{sessao.user.email}</p>
         </div>
 
         {trocando && fatores && (
@@ -3113,7 +3214,9 @@
           </div>
         )}
         <div style={{padding:"16px 0"}}>
-          <div style={{display:"flex",gap:10,flexWrap:"wrap",alignItems:"flex-end"}}>
+          {/* Bloco 1: o que se procura */}
+          <div style={{border:"1px solid #e3e6ea",borderRadius:12,padding:"12px 14px",background:"#fbfcfd"}}>
+            <div style={{display:"flex",gap:10,flexWrap:"wrap",alignItems:"flex-end"}}>
             <div><label>De (data)</label><input type="date" value={de} onChange={e=>setDe(e.target.value)} /></div>
             <div><label>Até (data)</label><input type="date" value={ate} onChange={e=>setAte(e.target.value)} /></div>
             {cfg.filtroTipo && (
@@ -3138,51 +3241,63 @@
                 </select>
               </div>
             )}
-            {/* onClick={buscar} passaria o evento do clique como argumento — daí a arrow */}
-            <button className="btn btn-blue" onClick={()=>buscar()} disabled={carregando}>{carregando?"Buscando...":"Buscar"}</button>
-            <button className="btn btn-light" onClick={()=>{ limparFiltros(); }} disabled={carregando}>Limpar filtros</button>
-            <button className="btn btn-light" onClick={baixarCSV} disabled={carregando}
-              title="Uma linha por colaborador por documento — matrícula, data, OS e serviço">
-              Relatório por colaborador (CSV)
-            </button>
-            {lista.length>0 && <button className="btn btn-light" onClick={baixarTodos}
-              title="Só os documentos oficiais, sem fotos — é este que vai para a Iguá">
-              Baixar todos (PDF único)</button>}
-            {lista.length>0 && <button onClick={baixarComFotos} disabled={carregando}
-              title="Cada documento seguido de uma folha com as fotos da equipe. Uso interno."
-              style={{padding:"11px 16px",borderRadius:8,border:"1px solid #7A5510",background:"#FFF6E5",
-                      color:"#7A5510",fontSize:14,fontWeight:600,cursor:"pointer"}}>
-              Relatório com fotos (interno)</button>}
-            <button className="btn btn-light" onClick={baixarIndiceColaborador} disabled={carregando}
-              title="Só o índice, alguns KB: clique no nome e veja tudo o que a pessoa assinou">
-              Índice por colaborador</button>
-            <button onClick={baixarPacoteMes} disabled={carregando}
-              title="Índice + PDF do período, ligados: clicar no serviço abre o documento na página certa"
-              style={{padding:"11px 16px",borderRadius:8,border:"1px solid #0C447C",background:"#E6F1FB",
-                      color:"#0C447C",fontSize:14,fontWeight:600,cursor:"pointer"}}>
-              Pacote do período (índice + documentos)</button>
-            {!verLixeira && (
-              <button onClick={excluirPeriodo} disabled={carregando}
-                style={{padding:"11px 16px",borderRadius:8,border:"1px solid #A32D2D",background:"#fff",color:"#A32D2D",fontSize:14,fontWeight:600,cursor:"pointer"}}>
-                Enviar período à lixeira
-              </button>
-            )}
-            <button onClick={procurarOrfaos} disabled={carregando}
-              title="Procura PDFs no Storage que nenhum documento referencia"
-              style={{padding:"11px 16px",borderRadius:8,border:"1px solid #bbb",background:"#fff",
-                      color:"#555",fontSize:14,fontWeight:600,cursor:"pointer"}}>
-              Procurar PDFs órfãos
-            </button>
-            <button onClick={()=>{ const v=!verLixeira; setVerLixeira(v); setLista([]); buscar(v); }} disabled={carregando}
-              style={{padding:"11px 16px",borderRadius:8,border:"1px solid "+(verLixeira?"#185FA5":"#bbb"),
-                background:verLixeira?"#E6F1FB":"#fff",color:verLixeira?"#0C447C":"#555",fontSize:14,fontWeight:600,cursor:"pointer"}}>
-              {verLixeira?"← Ver registros ativos":"Ver lixeira"}
-            </button>
+            </div>
+            <div style={{display:"flex",gap:8,flexWrap:"wrap",marginTop:12,
+                         borderTop:"1px solid #edf0f3",paddingTop:12,alignItems:"center"}}>
+              {/* onClick={buscar} passaria o evento do clique como argumento — daí a arrow */}
+              <button className="btn btn-blue" onClick={()=>buscar()} disabled={carregando}
+                style={{padding:"10px 20px"}}>{carregando?"Buscando…":"Buscar"}</button>
+              <Acao onClick={()=>limparFiltros()} disabled={carregando}>Limpar filtros</Acao>
+              <span style={{marginLeft:"auto",fontSize:12.5,color:"#888"}}>
+                {lista.length>0 ? (lista.length+" resultado(s)") : ""}
+              </span>
+            </div>
           </div>
+
+          {/* Bloco 2: o que sai daqui */}
+          <Secao titulo="Relatórios" nota="Todos respeitam os filtros acima.">
+            <Acao onClick={baixarCSV} disabled={carregando}
+              dica="Uma linha por colaborador por documento — matrícula, data, OS e serviço">
+              Por colaborador (CSV)</Acao>
+            <Acao onClick={baixarIndiceColaborador} disabled={carregando}
+              dica="Só o índice, alguns KB: clique no nome e veja tudo o que a pessoa assinou">
+              Índice por colaborador</Acao>
+            <Acao onClick={baixarPacoteMes} disabled={carregando} cor="#0C447C" fundo="#E6F1FB"
+              dica="Índice + PDF do período, ligados: clicar no serviço abre o documento na página certa">
+              Pacote do período</Acao>
+            {lista.length>0 && <Acao onClick={baixarTodos} disabled={carregando}
+              dica="Só os documentos oficiais, sem fotos — é este que vai para a Iguá">
+              Documentos (PDF único)</Acao>}
+            {lista.length>0 && <Acao onClick={baixarComFotos} disabled={carregando} cor="#7A5510" fundo="#FFF6E5"
+              dica="Cada documento seguido de uma folha com as fotos da equipe. Uso interno.">
+              Com fotos (interno)</Acao>}
+          </Secao>
+
+          {/* Bloco 3: o que mexe no acervo */}
+          <Secao titulo="Manutenção">
+            <Acao onClick={()=>{ const v=!verLixeira; setVerLixeira(v); setLista([]); buscar(v); }}
+              disabled={carregando} cor={verLixeira?"#0C447C":undefined} fundo={verLixeira?"#E6F1FB":undefined}>
+              {verLixeira?"← Ver registros ativos":"Ver lixeira"}</Acao>
+            <Acao onClick={procurarOrfaos} disabled={carregando}
+              dica="Procura PDFs no Storage que nenhum documento referencia">
+              Procurar PDFs órfãos</Acao>
+            {!verLixeira && (
+              <Acao onClick={excluirPeriodo} disabled={carregando} cor="#A32D2D"
+                dica="Os registros saem das listagens, mas podem ser restaurados">
+                Enviar período à lixeira</Acao>
+            )}
+            {verLixeira && (
+              <Acao onClick={esvaziarLixeira} disabled={carregando} cor="#fff" fundo="#A32D2D" borda="#A32D2D"
+                dica="Exclusão definitiva: apaga registros, PDFs e fotos. Não tem volta.">
+                Esvaziar lixeira</Acao>
+            )}
+          </Secao>
           {verLixeira
             ? <p style={{fontSize:12,color:"#0C447C",margin:"8px 0 0",background:"#E6F1FB",border:"1px solid #BBD6F0",borderRadius:8,padding:"8px 10px"}}>
                 Você está vendo a <b>lixeira</b>: registros que saíram das listagens mas continuam
                 no banco, com o PDF preservado. "Restaurar" devolve o registro ao normal.
+                <br/><b style={{color:"#A32D2D"}}>"Esvaziar lixeira" apaga de vez</b> — registros, PDFs e
+                fotos, sem recuperação. Confira os filtros antes.
               </p>
             : <p style={{fontSize:12,color:"#999",margin:"8px 0 0"}}>
                 Os registros do período em "De/Até" saem das listagens e vão para a lixeira.
