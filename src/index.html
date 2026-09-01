@@ -38,7 +38,7 @@
       if (document.getElementById('faixa-atualizar')) return;
       var f = document.createElement('div');
       f.id = 'faixa-atualizar';
-      f.style.cssText = 'position:fixed;left:0;right:0;bottom:0;z-index:99999;background:#C8141E;color:#fff;'
+      f.style.cssText = 'position:fixed;left:0;right:0;bottom:0;z-index:99999;background:#185FA5;color:#fff;'
         + 'padding:12px 14px;display:flex;align-items:center;gap:12px;font:600 14px system-ui,sans-serif;'
         + 'box-shadow:0 -2px 12px rgba(0,0,0,.25)';
       var t = document.createElement('span');
@@ -46,7 +46,7 @@
       t.style.flex = '1';
       var b = document.createElement('button');
       b.textContent = 'Atualizar';
-      b.style.cssText = 'background:#fff;color:#C8141E;border:none;border-radius:8px;padding:8px 16px;'
+      b.style.cssText = 'background:#fff;color:#185FA5;border:none;border-radius:8px;padding:8px 16px;'
         + 'font:700 14px system-ui,sans-serif;cursor:pointer';
       b.onclick = function () {
         if (navigator.serviceWorker.controller) {
@@ -153,7 +153,7 @@
 
   <script type="text/babel">
     const { useState, useRef, useEffect } = React;
-    const APP_VERSION = "V13";
+    const APP_VERSION = "V14";
 
     // ===== CONFIG SUPABASE =====
     const SUPABASE_URL = "https://atbkjmvogkuekrcoevkn.supabase.co";
@@ -2559,7 +2559,9 @@
       // O artefato que a defesa trabalhista pede: uma linha por pessoa por documento,
       // com matrícula, data, OS e serviço. Sai do mesmo filtro que está na tela.
       async function baixarCSV(){
-        setCarregando(true); setMsg("");
+        // Sem barra: aqui não há laço por documento para medir — é uma consulta
+        // paginada e a montagem do texto. O aviso evita o clique repetido.
+        setCarregando(true); setMsg("Buscando os dados…");
         try{
           const montar=()=>{
             // aqui a junção é sempre necessária: o CSV é POR pessoa
@@ -2753,7 +2755,7 @@
         if(!comPdf.length){ alert("Nenhum documento com PDF no período."); return; }
         setCarregando(true); setMsg("");
         const t0=Date.now();
-        setProg({feitos:0,total:comPdf.length,restante:null});
+        setProg({feitos:0,total:comPdf.length,restante:null,rotulo:"Montando o relatório com fotos"});
         try{
           const { PDFDocument, StandardFonts, rgb }=PDFLib;
           const equipes=await equipesDe(comPdf);
@@ -2822,7 +2824,8 @@
             processados++;
             const medio=(Date.now()-t0)/processados;
             const faltam=comPdf.length-processados;
-            setProg({feitos:processados,total:comPdf.length,restante:faltam?Math.round(medio*faltam/1000):0});
+            setProg({feitos:processados,total:comPdf.length,
+              restante:faltam?Math.round(medio*faltam/1000):0,rotulo:"Montando o relatório com fotos"});
             await new Promise(r=>setTimeout(r,0));
           }
           if(!ok){ setMsg("Não foi possível montar o relatório."); return; }
@@ -2848,7 +2851,7 @@
       // num arquivo só, que trava o navegador. O índice pesa alguns KB e diz qual
       // documento buscar; o PDF continua no acervo.
       async function baixarIndiceColaborador(){
-        setCarregando(true); setMsg("");
+        setCarregando(true); setMsg("Montando o índice…");
         try{
           const montar=()=>{
             let q=supa.from(cfg.tabela).select(cfg.select).is("excluido_em",null)
@@ -2919,7 +2922,7 @@
           const unificado=await PDFDocument.create();
           const pagina={};                 // id do documento -> página em que começa
           let ok=0, falhas=0, processados=0;
-          setProg({feitos:0,total:docs.length,restante:null});
+          setProg({feitos:0,total:docs.length,restante:null,rotulo:"Montando o pacote do período"});
 
           for(const item of docs){
             if(item.pdf_path){
@@ -2936,7 +2939,8 @@
             processados++;
             const medio=(Date.now()-t0)/processados;
             const faltam=docs.length-processados;
-            setProg({feitos:processados,total:docs.length,restante:faltam?Math.round(medio*faltam/1000):0});
+            setProg({feitos:processados,total:docs.length,
+              restante:faltam?Math.round(medio*faltam/1000):0,rotulo:"Montando o pacote do período"});
             await new Promise(r=>setTimeout(r,0));
           }
 
@@ -2978,7 +2982,7 @@
         if(!comPdf.length){ alert("Nenhum PDF disponível para baixar."); return; }
         setCarregando(true); setMsg("");
         const t0=Date.now();
-        setProg({feitos:0,total:comPdf.length,restante:null});
+        setProg({feitos:0,total:comPdf.length,restante:null,rotulo:"Unificando os documentos"});
         try{
           const { PDFDocument }=PDFLib;
           const unificado=await PDFDocument.create();
@@ -2997,7 +3001,8 @@
             // estimativa: tempo médio por arquivo x quantos faltam
             const medio=(Date.now()-t0)/processados;
             const faltam=comPdf.length-processados;
-            setProg({feitos:processados,total:comPdf.length,restante:faltam?Math.round(medio*faltam/1000):0});
+            setProg({feitos:processados,total:comPdf.length,
+              restante:faltam?Math.round(medio*faltam/1000):0,rotulo:"Unificando os documentos"});
             // devolve o controle ao navegador para a barra realmente repintar
             await new Promise(r=>setTimeout(r,0));
           }
@@ -3326,20 +3331,27 @@
           )}
 
           {prog && (
-            <div style={{margin:"10px 0",padding:"10px 12px",border:"1px solid #e3e3e3",borderRadius:8,background:"#fafafa"}}>
-              <div style={{display:"flex",justifyContent:"space-between",fontSize:13,color:"#555",marginBottom:6}}>
-                <span>Unificando PDFs — {prog.feitos} de {prog.total}</span>
+            // O rótulo vem de quem disparou: são três operações usando esta mesma barra,
+            // e antes todas diziam "Unificando PDFs". Quem via o relatório com fotos
+            // levava um minuto achando que tinha clicado no botão errado.
+            <div style={{margin:"12px 0",padding:"12px 14px",border:"1px solid #dbe6f2",
+                         borderRadius:10,background:"#f7fafd"}}>
+              <div style={{display:"flex",justifyContent:"space-between",fontSize:13,color:"#0C447C",
+                           marginBottom:7,fontWeight:600}}>
+                <span>{(prog.rotulo||"Processando")} — {prog.feitos} de {prog.total}</span>
                 <span>{Math.round(prog.feitos/prog.total*100)}%</span>
               </div>
-              <div style={{height:8,background:"#e6e6e6",borderRadius:99,overflow:"hidden"}}>
-                <div style={{height:"100%",width:(prog.feitos/prog.total*100)+"%",background:"#C8141E",transition:"width .2s"}}></div>
+              <div style={{height:9,background:"#dde7f1",borderRadius:99,overflow:"hidden"}}>
+                <div style={{height:"100%",width:(prog.feitos/prog.total*100)+"%",
+                             background:"#185FA5",transition:"width .25s"}}></div>
               </div>
-              <div style={{fontSize:12,color:"#888",marginTop:6}}>
-                {prog.restante==null ? "Calculando tempo restante..."
-                  : prog.restante>0 ? ("Tempo restante estimado: "+(prog.restante>=60
+              <div style={{fontSize:12,color:"#7d8a97",marginTop:7}}>
+                {prog.restante==null ? "Calculando o tempo restante…"
+                  : prog.restante>0 ? ("~"+(prog.restante>=60
                       ? (Math.floor(prog.restante/60)+" min "+(prog.restante%60)+" s")
-                      : (prog.restante+" s")))
-                  : "Finalizando o arquivo..."}
+                      : (prog.restante+" s"))+" restantes")
+                  : "Finalizando o arquivo…"}
+                {prog.total>150 && " · não feche a aba"}
               </div>
             </div>
           )}
