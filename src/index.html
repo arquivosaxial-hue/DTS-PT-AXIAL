@@ -153,7 +153,7 @@
 
   <script type="text/babel">
     const { useState, useRef, useEffect } = React;
-    const APP_VERSION = "V16";
+    const APP_VERSION = "V17";
 
     // ===== CONFIG SUPABASE =====
     const SUPABASE_URL = "https://atbkjmvogkuekrcoevkn.supabase.co";
@@ -793,6 +793,7 @@
     // só da que faltou. O caminho é o da regra 2.3: avisa, exige confirmação, registra.
     const MOTIVOS_SEM_FOTO = [
       ["recusou",      "O colaborador não autorizou a foto"],
+      ["area_risco",   "Área de risco — foto não permitida no local"],
       ["indisponivel", "A câmera não está disponível neste aparelho"],
     ];
     const rotuloMotivo = (m) => (MOTIVOS_SEM_FOTO.find(x=>x[0]===m)||[,null])[1]
@@ -1915,6 +1916,7 @@
                 : <span style={{color:l.foto_motivo?"#B07A16":"#bbb",fontSize:11}}
                     title={rotuloMotivo(l.foto_motivo)}>
                     {l.foto_motivo==="recusou" ? "recusou a foto"
+                      : l.foto_motivo==="area_risco" ? "área de risco"
                       : l.foto_motivo==="indisponivel" ? "sem câmera"
                       : "sem foto"}</span>}
             </div>
@@ -2904,6 +2906,7 @@
                   pg.drawRectangle({ x, y:y-(ALT-34), width:LARG, height:ALT-34,
                     borderColor:rgb(0.85,0.85,0.85), borderWidth:0.8 });
                   const txt = c.foto_motivo==="recusou" ? "não autorizou"
+                            : c.foto_motivo==="area_risco" ? "área de risco"
                             : c.foto_motivo==="indisponivel" ? "sem câmera" : "sem foto";
                   pg.drawText(txt, { x:x+LARG/2-fonte.widthOfTextAtSize(txt,9)/2,
                     y:y-(ALT-34)/2, size:9, font:fonte, color:rgb(0.6,0.6,0.6) });
