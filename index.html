@@ -160,7 +160,7 @@ const {
   useRef,
   useEffect
 } = React;
-const APP_VERSION = "V16";
+const APP_VERSION = "V17";
 
 // ===== CONFIG SUPABASE =====
 const SUPABASE_URL = "https://atbkjmvogkuekrcoevkn.supabase.co";
@@ -1523,7 +1523,7 @@ const CAM_PADRAO_FRONTAL = true;
 // foto não impede o documento, e consentimento que não pode ser recusado não é
 // consentimento (art. 11 da LGPD). Travar derrubaria o valor de TODAS as fotos, não
 // só da que faltou. O caminho é o da regra 2.3: avisa, exige confirmação, registra.
-const MOTIVOS_SEM_FOTO = [["recusou", "O colaborador não autorizou a foto"], ["indisponivel", "A câmera não está disponível neste aparelho"]];
+const MOTIVOS_SEM_FOTO = [["recusou", "O colaborador não autorizou a foto"], ["area_risco", "Área de risco — foto não permitida no local"], ["indisponivel", "A câmera não está disponível neste aparelho"]];
 const rotuloMotivo = m => (MOTIVOS_SEM_FOTO.find(x => x[0] === m) || [, null])[1] || (m ? "sem foto (" + m + ")" : "sem foto");
 function dataUrlParaBlob(dataUrl) {
   const [cabecalho, b64] = String(dataUrl || "").split(",");
@@ -3540,7 +3540,7 @@ function EquipeDoDocumento({
       fontSize: 11
     },
     title: rotuloMotivo(l.foto_motivo)
-  }, l.foto_motivo === "recusou" ? "recusou a foto" : l.foto_motivo === "indisponivel" ? "sem câmera" : "sem foto"))), /*#__PURE__*/React.createElement("p", {
+  }, l.foto_motivo === "recusou" ? "recusou a foto" : l.foto_motivo === "area_risco" ? "área de risco" : l.foto_motivo === "indisponivel" ? "sem câmera" : "sem foto"))), /*#__PURE__*/React.createElement("p", {
     style: {
       fontSize: 11,
       color: "#aaa",
@@ -4973,7 +4973,7 @@ function PainelAdm({
                 borderColor: rgb(0.85, 0.85, 0.85),
                 borderWidth: 0.8
               });
-              const txt = c.foto_motivo === "recusou" ? "não autorizou" : c.foto_motivo === "indisponivel" ? "sem câmera" : "sem foto";
+              const txt = c.foto_motivo === "recusou" ? "não autorizou" : c.foto_motivo === "area_risco" ? "área de risco" : c.foto_motivo === "indisponivel" ? "sem câmera" : "sem foto";
               pg.drawText(txt, {
                 x: x + LARG / 2 - fonte.widthOfTextAtSize(txt, 9) / 2,
                 y: y - (ALT - 34) / 2,
