@@ -160,7 +160,7 @@ const {
   useRef,
   useEffect
 } = React;
-const APP_VERSION = "V12";
+const APP_VERSION = "V13";
 
 // ===== CONFIG SUPABASE =====
 const SUPABASE_URL = "https://atbkjmvogkuekrcoevkn.supabase.co";
@@ -4024,6 +4024,75 @@ function montarHtmlIndice(pessoas, periodo, rotulo, totalDocs, semEquipe, nomePd
   const dados = JSON.stringify(pessoas).replace(/</g, "\\u003c");
   return "<!doctype html>\n" + "<html lang=\"pt-BR\"><head><meta charset=\"utf-8\">" + "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">" + "<title>Índice por colaborador — " + esc(rotulo) + " — " + esc(periodo) + "</title><style>" + "*{box-sizing:border-box}body{margin:0;font:15px/1.5 system-ui,Segoe UI,Arial,sans-serif;color:#222;background:#f5f6f8}" + ".topo{background:#1B3A6B;color:#fff;padding:18px 22px}.topo h1{margin:0;font-size:19px}" + ".topo p{margin:5px 0 0;font-size:13px;color:#c8d8ee}" + ".corpo{display:flex;gap:16px;padding:16px;flex-wrap:wrap;align-items:flex-start}" + ".lado{flex:0 0 300px;background:#fff;border:1px solid #e3e6ea;border-radius:10px;padding:10px;max-height:78vh;overflow:auto}" + ".lado input{width:100%;padding:9px;border:1px solid #ccc;border-radius:8px;font-size:14px;margin-bottom:8px}" + ".pessoa{padding:9px 10px;border-radius:8px;cursor:pointer;border-bottom:1px solid #f1f1f1}" + ".pessoa:hover{background:#f3f7fc}.pessoa.sel{background:#1B3A6B;color:#fff}" + ".pessoa b{display:block;font-size:14px}.pessoa span{font-size:12px;opacity:.75}" + ".painel{flex:1;min-width:340px;background:#fff;border:1px solid #e3e6ea;border-radius:10px;padding:16px}" + "table{width:100%;border-collapse:collapse;font-size:13px}" + "th{text-align:left;color:#666;font-weight:600;border-bottom:2px solid #eee;padding:7px 6px;font-size:12px}" + "td{padding:7px 6px;border-bottom:1px solid #f2f2f2;vertical-align:top}" + ".vazio{color:#888;padding:26px 0;text-align:center}" + ".resumo{background:#f7fafd;border:1px solid #dbe6f2;border-radius:8px;padding:10px 12px;margin-bottom:12px;font-size:13px}" + ".ver{color:#1B3A6B;font-weight:600;text-decoration:none;white-space:nowrap}.ver:hover{text-decoration:underline}" + ".aviso{background:#FFF6E5;border:1px solid #E7C77A;color:#7A5510;border-radius:8px;padding:9px 12px;margin:0 16px;font-size:12.5px}" + "@media print{.lado{display:none}.painel{border:0}}" + "</style></head><body>" + "<div class=\"topo\"><h1>Índice por colaborador — " + esc(rotulo) + "</h1>" + "<p>Período " + esc(periodo) + " · " + totalDocs + " documento(s) · " + pessoas.length + " colaborador(es)" + (semEquipe ? " · " + semEquipe + " documento(s) sem equipe registrada" : "") + "</p></div>" + (nomePdf ? "<div class=\"aviso\">Para os links abrirem, mantenha este arquivo <b>na mesma pasta</b> que <b>" + esc(nomePdf) + "</b>. Se o navegador não pular para a página, o número dela está escrito no link.</div>" : "") + "<div class=\"corpo\"><div class=\"lado\">" + "<input id=\"busca\" placeholder=\"Buscar nome ou matrícula\">" + "<div id=\"lista\"></div></div>" + "<div class=\"painel\" id=\"painel\"><div class=\"vazio\">Clique num nome à esquerda para ver os serviços em que a pessoa trabalhou.</div></div>" + "</div><script>\n" + "var PESSOAS=" + dados + ";\n" + "var PDF=" + JSON.stringify(nomePdf || null) + ";\n" + "var sel=null;\n" + "// Nome de colaborador pode ser digitado à mão em campo. Sem escapar, um nome\n" + "// com HTML dentro viraria markup — ou script — no arquivo que o jurídico abre.\n" + "function E(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;')\n" + "  .replace(/>/g,'&gt;').replace(/\"/g,'&quot;'); }\n" + "function desenharLista(){\n" + "  var q=(document.getElementById('busca').value||'').toLowerCase().trim();\n" + "  var alvo=document.getElementById('lista'); alvo.innerHTML='';\n" + "  PESSOAS.filter(function(p){ return !q || (p.nome||'').toLowerCase().indexOf(q)>=0 || (p.codigo||'').toLowerCase().indexOf(q)>=0; })\n" + "  .forEach(function(p,i){\n" + "    var d=document.createElement('div'); d.className='pessoa'+(sel===p?' sel':'');\n" + "    d.innerHTML='<b>'+E(p.nome)+'</b><span>'+(p.codigo?('Mat. '+E(p.codigo)):'sem matrícula')+' · '+p.docs.length+' documento(s)</span>';\n" + "    d.onclick=function(){ sel=p; desenharLista(); mostrar(p); };\n" + "    alvo.appendChild(d);\n" + "  });\n" + "}\n" + "function mostrar(p){\n" + "  var comFoto=p.docs.filter(function(d){return d.comFoto;}).length;\n" + "  var h='<div class=\"resumo\"><b>'+E(p.nome)+'</b>'+(p.codigo?(' · matrícula '+E(p.codigo)):' · sem matrícula')\n" + "    +'<br>'+p.docs.length+' documento(s) no período · '+comFoto+' com registro fotográfico</div>';\n" + "  h+='<table><tr><th>Data</th><th>OS</th><th>Serviço</th><th>Local</th><th>Responsável</th><th>Hora</th>'+(PDF?'<th>Documento</th>':'')+'</tr>';\n" + "  p.docs.slice().sort(function(a,b){return (a.data||'').localeCompare(b.data||'');}).forEach(function(d){\n" + "    var hora=d.hora?new Date(d.hora).toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'}):'';\n" + "    h+='<tr><td>'+E(d.data)+'</td><td>'+E(d.os)+'</td><td>'+E(d.servico)+(d.tipo?(' ('+E(d.tipo)+')'):'')\n" + "      +'</td><td>'+E(d.local)+'</td><td>'+E(d.lider)+'</td><td>'+E(hora)+'</td>';\n" + "    if(PDF){\n" + "      h+= d.pagina ? ('<td><a class=\"ver\" href=\"'+E(PDF)+'#page='+d.pagina+'\" target=\"_blank\">abrir · pág. '+d.pagina+'</a></td>')\n" + "                   : '<td style=\"color:#aaa\">sem PDF</td>';\n" + "    }\n" + "    h+='</tr>';\n" + "  });\n" + "  document.getElementById('painel').innerHTML=h+'</table>';\n" + "}\n" + "document.getElementById('busca').oninput=desenharLista;\n" + "desenharLista();\n" + "<\/script></body></html>";
 }
+
+// Botão de ação do painel. Existe para os botões pararem de ser cada um de um
+// jeito: antes havia cinco estilos inline diferentes lado a lado.
+function Acao({
+  children,
+  onClick,
+  disabled,
+  cor,
+  fundo,
+  borda,
+  dica
+}) {
+  return /*#__PURE__*/React.createElement("button", {
+    onClick: onClick,
+    disabled: disabled,
+    title: dica || undefined,
+    style: {
+      padding: "9px 14px",
+      borderRadius: 8,
+      border: "1px solid " + (borda || cor || "#ccd2d8"),
+      background: fundo || "#fff",
+      color: cor || "#44505c",
+      fontSize: 13.5,
+      fontWeight: 600,
+      cursor: disabled ? "default" : "pointer",
+      opacity: disabled ? .55 : 1
+    }
+  }, children);
+}
+
+// Agrupa ações sob um rótulo. Com onze botões numa linha só, ninguém achava
+// o que procurava — e o de apagar ficava do lado do de baixar.
+function Secao({
+  titulo,
+  nota,
+  children
+}) {
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 14
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      alignItems: "baseline",
+      gap: 8,
+      margin: "0 0 7px"
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 11,
+      fontWeight: 700,
+      letterSpacing: .8,
+      color: "#8a95a1",
+      textTransform: "uppercase"
+    }
+  }, titulo), nota && /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 11.5,
+      color: "#aab2bb"
+    }
+  }, nota)), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 8,
+      flexWrap: "wrap"
+    }
+  }, children));
+}
 function PainelAdm({
   onVoltar,
   cfg = CFG_DTS
@@ -4507,6 +4576,72 @@ function PainelAdm({
       if (!data || !data.length) setMsg(naLixeira ? "A lixeira está vazia no período." : "Nenhum registro encontrado no período.");
     } catch (e) {
       setMsg("Erro: " + e.message);
+    } finally {
+      setCarregando(false);
+    }
+  }
+
+  // ---- ESVAZIAR A LIXEIRA (exclusão definitiva) ----
+  // A única operação do app que destrói documento de segurança. Por isso:
+  //   1) só existe DENTRO da lixeira — o registro já passou por uma exclusão antes;
+  //   2) respeita os filtros da tela, como todo o resto (aplicarFiltros);
+  //   3) exige digitar APAGAR, porque um "OK" no susto é fácil demais;
+  //   4) apaga o registro ANTES dos arquivos. Se a ordem fosse inversa e o banco
+  //      falhasse, sobraria documento apontando para um PDF que não existe mais —
+  //      pior do que arquivo órfão, que o "Procurar PDFs órfãos" ainda acha.
+  // Os colaboradores somem junto por cascade da chave estrangeira.
+  async function esvaziarLixeira() {
+    setCarregando(true);
+    setMsg("");
+    try {
+      const montar = () => {
+        const sel = colabFiltro.trim() ? "id,pdf_path," + cfg.colab + "!inner(codigo,nome,foto_path)" : "id,pdf_path," + cfg.colab + "(foto_path)";
+        let q = supa.from(cfg.tabela).select(sel).not("excluido_em", "is", null);
+        return aplicarFiltros(q);
+      };
+      const alvos = await buscarTudo(montar);
+      if (!alvos || !alvos.length) {
+        setMsg("A lixeira está vazia com os filtros atuais.");
+        return;
+      }
+      const conf = window.prompt("EXCLUSÃO DEFINITIVA de " + alvos.length + " registro(s) da lixeira.\n\n" + "Filtros em vigor: " + resumoFiltros() + "\n\n" + "Os documentos, as equipes, os PDFs e as fotos serão apagados e NÃO poderão ser " + "recuperados de nenhuma forma.\n\n" + "Para confirmar, digite APAGAR:");
+      if (conf === null) return;
+      if (conf.trim().toUpperCase() !== "APAGAR") {
+        setMsg("Exclusão cancelada — o texto não confere.");
+        return;
+      }
+      const pdfs = alvos.filter(a => a.pdf_path).map(a => a.pdf_path);
+      const fotos = [];
+      alvos.forEach(a => (a[cfg.colab] || []).forEach(c => {
+        if (c.foto_path) fotos.push(c.foto_path);
+      }));
+      const ids = alvos.map(a => a.id);
+      let apagados = 0;
+      for (let i = 0; i < ids.length; i += 200) {
+        const {
+          error
+        } = await supa.from(cfg.tabela).delete().in("id", ids.slice(i, i + 200));
+        if (error) throw error;
+        apagados += Math.min(200, ids.length - i);
+      }
+      // arquivos depois: falha aqui vira lixo recuperável, não documento quebrado
+      let arquivosErro = 0;
+      for (let i = 0; i < pdfs.length; i += 100) {
+        const {
+          error
+        } = await supa.storage.from("dts-pdfs").remove(pdfs.slice(i, i + 100));
+        if (error) arquivosErro++;
+      }
+      for (let i = 0; i < fotos.length; i += 100) {
+        const {
+          error
+        } = await supa.storage.from("rubricas").remove(fotos.slice(i, i + 100));
+        if (error) arquivosErro++;
+      }
+      setLista([]);
+      setMsg(apagados + " registro(s) apagados definitivamente · " + pdfs.length + " PDF(s) e " + fotos.length + " foto(s) removidos" + (arquivosErro ? " · " + arquivosErro + " lote(s) de arquivo falharam — use \"Procurar PDFs órfãos\"" : "") + ".");
+    } catch (e) {
+      setMsg("Erro ao esvaziar a lixeira: " + e.message);
     } finally {
       setCarregando(false);
     }
@@ -5322,42 +5457,68 @@ function PainelAdm({
   }, /*#__PURE__*/React.createElement("div", {
     className: "header",
     style: {
-      borderRadius: 10
+      borderRadius: 10,
+      paddingBottom: 14
     }
-  }, /*#__PURE__*/React.createElement("h1", null, "Painel administrativo \u2014 ", cfg.rotulo), /*#__PURE__*/React.createElement("p", null, "Construtora Axial \xB7 relat\xF3rios por per\xEDodo"), /*#__PURE__*/React.createElement("p", {
+  }, /*#__PURE__*/React.createElement("div", {
     style: {
-      margin: "6px 0 0",
+      display: "flex",
+      justifyContent: "space-between",
+      alignItems: "flex-start",
+      gap: 12,
+      flexWrap: "wrap"
+    }
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("h1", {
+    style: {
+      marginBottom: 2
+    }
+  }, "Painel administrativo"), /*#__PURE__*/React.createElement("p", {
+    style: {
+      margin: 0
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      background: "rgba(255,255,255,.18)",
+      padding: "2px 9px",
+      borderRadius: 20,
+      fontWeight: 700,
       fontSize: 12,
+      letterSpacing: .4
+    }
+  }, cfg.rotulo), /*#__PURE__*/React.createElement("span", {
+    style: {
+      marginLeft: 8,
+      opacity: .9
+    }
+  }, "Construtora Axial"))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 6,
+      flexWrap: "wrap",
+      alignItems: "center"
+    }
+  }, [["efetivo", () => setVerEfetivo(true)], ["alterar senha", () => {
+    setTrocando(v => !v);
+    setMsgSenha("");
+  }], ["sair", sair]].map(([rot, fn]) => /*#__PURE__*/React.createElement("a", {
+    key: rot,
+    onClick: fn,
+    style: {
+      color: "#fff",
+      cursor: "pointer",
+      fontSize: 12,
+      fontWeight: 600,
+      border: "1px solid rgba(255,255,255,.45)",
+      borderRadius: 20,
+      padding: "4px 11px"
+    }
+  }, rot)))), /*#__PURE__*/React.createElement("p", {
+    style: {
+      margin: "10px 0 0",
+      fontSize: 11.5,
       color: "#B5D4F4"
     }
-  }, sessao.user.email, /*#__PURE__*/React.createElement("a", {
-    onClick: () => {
-      setTrocando(v => !v);
-      setMsgSenha("");
-    },
-    style: {
-      marginLeft: 10,
-      color: "#fff",
-      cursor: "pointer",
-      textDecoration: "underline"
-    }
-  }, "alterar senha"), /*#__PURE__*/React.createElement("a", {
-    onClick: () => setVerEfetivo(true),
-    style: {
-      marginLeft: 10,
-      color: "#fff",
-      cursor: "pointer",
-      textDecoration: "underline"
-    }
-  }, "efetivo"), /*#__PURE__*/React.createElement("a", {
-    onClick: sair,
-    style: {
-      marginLeft: 10,
-      color: "#fff",
-      cursor: "pointer",
-      textDecoration: "underline"
-    }
-  }, "sair"))), trocando && fatores && /*#__PURE__*/React.createElement("div", {
+  }, sessao.user.email)), trocando && fatores && /*#__PURE__*/React.createElement("div", {
     style: {
       border: "1px solid #dbe6f2",
       background: "#f7fafd",
@@ -5525,6 +5686,13 @@ function PainelAdm({
     }
   }, /*#__PURE__*/React.createElement("div", {
     style: {
+      border: "1px solid #e3e6ea",
+      borderRadius: 12,
+      padding: "12px 14px",
+      background: "#fbfcfd"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
       display: "flex",
       gap: 10,
       flexWrap: "wrap",
@@ -5584,86 +5752,62 @@ function PainelAdm({
   }, "Todos"), SERVICOS.map(s => /*#__PURE__*/React.createElement("option", {
     key: s,
     value: s
-  }, s)))), /*#__PURE__*/React.createElement("button", {
+  }, s))))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 8,
+      flexWrap: "wrap",
+      marginTop: 12,
+      borderTop: "1px solid #edf0f3",
+      paddingTop: 12,
+      alignItems: "center"
+    }
+  }, /*#__PURE__*/React.createElement("button", {
     className: "btn btn-blue",
     onClick: () => buscar(),
+    disabled: carregando,
+    style: {
+      padding: "10px 20px"
+    }
+  }, carregando ? "Buscando…" : "Buscar"), /*#__PURE__*/React.createElement(Acao, {
+    onClick: () => limparFiltros(),
     disabled: carregando
-  }, carregando ? "Buscando..." : "Buscar"), /*#__PURE__*/React.createElement("button", {
-    className: "btn btn-light",
-    onClick: () => {
-      limparFiltros();
-    },
-    disabled: carregando
-  }, "Limpar filtros"), /*#__PURE__*/React.createElement("button", {
-    className: "btn btn-light",
+  }, "Limpar filtros"), /*#__PURE__*/React.createElement("span", {
+    style: {
+      marginLeft: "auto",
+      fontSize: 12.5,
+      color: "#888"
+    }
+  }, lista.length > 0 ? lista.length + " resultado(s)" : ""))), /*#__PURE__*/React.createElement(Secao, {
+    titulo: "Relat\xF3rios",
+    nota: "Todos respeitam os filtros acima."
+  }, /*#__PURE__*/React.createElement(Acao, {
     onClick: baixarCSV,
     disabled: carregando,
-    title: "Uma linha por colaborador por documento \u2014 matr\xEDcula, data, OS e servi\xE7o"
-  }, "Relat\xF3rio por colaborador (CSV)"), lista.length > 0 && /*#__PURE__*/React.createElement("button", {
-    className: "btn btn-light",
-    onClick: baixarTodos,
-    title: "S\xF3 os documentos oficiais, sem fotos \u2014 \xE9 este que vai para a Igu\xE1"
-  }, "Baixar todos (PDF \xFAnico)"), lista.length > 0 && /*#__PURE__*/React.createElement("button", {
-    onClick: baixarComFotos,
-    disabled: carregando,
-    title: "Cada documento seguido de uma folha com as fotos da equipe. Uso interno.",
-    style: {
-      padding: "11px 16px",
-      borderRadius: 8,
-      border: "1px solid #7A5510",
-      background: "#FFF6E5",
-      color: "#7A5510",
-      fontSize: 14,
-      fontWeight: 600,
-      cursor: "pointer"
-    }
-  }, "Relat\xF3rio com fotos (interno)"), /*#__PURE__*/React.createElement("button", {
-    className: "btn btn-light",
+    dica: "Uma linha por colaborador por documento \u2014 matr\xEDcula, data, OS e servi\xE7o"
+  }, "Por colaborador (CSV)"), /*#__PURE__*/React.createElement(Acao, {
     onClick: baixarIndiceColaborador,
     disabled: carregando,
-    title: "S\xF3 o \xEDndice, alguns KB: clique no nome e veja tudo o que a pessoa assinou"
-  }, "\xCDndice por colaborador"), /*#__PURE__*/React.createElement("button", {
+    dica: "S\xF3 o \xEDndice, alguns KB: clique no nome e veja tudo o que a pessoa assinou"
+  }, "\xCDndice por colaborador"), /*#__PURE__*/React.createElement(Acao, {
     onClick: baixarPacoteMes,
     disabled: carregando,
-    title: "\xCDndice + PDF do per\xEDodo, ligados: clicar no servi\xE7o abre o documento na p\xE1gina certa",
-    style: {
-      padding: "11px 16px",
-      borderRadius: 8,
-      border: "1px solid #0C447C",
-      background: "#E6F1FB",
-      color: "#0C447C",
-      fontSize: 14,
-      fontWeight: 600,
-      cursor: "pointer"
-    }
-  }, "Pacote do per\xEDodo (\xEDndice + documentos)"), !verLixeira && /*#__PURE__*/React.createElement("button", {
-    onClick: excluirPeriodo,
+    cor: "#0C447C",
+    fundo: "#E6F1FB",
+    dica: "\xCDndice + PDF do per\xEDodo, ligados: clicar no servi\xE7o abre o documento na p\xE1gina certa"
+  }, "Pacote do per\xEDodo"), lista.length > 0 && /*#__PURE__*/React.createElement(Acao, {
+    onClick: baixarTodos,
     disabled: carregando,
-    style: {
-      padding: "11px 16px",
-      borderRadius: 8,
-      border: "1px solid #A32D2D",
-      background: "#fff",
-      color: "#A32D2D",
-      fontSize: 14,
-      fontWeight: 600,
-      cursor: "pointer"
-    }
-  }, "Enviar per\xEDodo \xE0 lixeira"), /*#__PURE__*/React.createElement("button", {
-    onClick: procurarOrfaos,
+    dica: "S\xF3 os documentos oficiais, sem fotos \u2014 \xE9 este que vai para a Igu\xE1"
+  }, "Documentos (PDF \xFAnico)"), lista.length > 0 && /*#__PURE__*/React.createElement(Acao, {
+    onClick: baixarComFotos,
     disabled: carregando,
-    title: "Procura PDFs no Storage que nenhum documento referencia",
-    style: {
-      padding: "11px 16px",
-      borderRadius: 8,
-      border: "1px solid #bbb",
-      background: "#fff",
-      color: "#555",
-      fontSize: 14,
-      fontWeight: 600,
-      cursor: "pointer"
-    }
-  }, "Procurar PDFs \xF3rf\xE3os"), /*#__PURE__*/React.createElement("button", {
+    cor: "#7A5510",
+    fundo: "#FFF6E5",
+    dica: "Cada documento seguido de uma folha com as fotos da equipe. Uso interno."
+  }, "Com fotos (interno)")), /*#__PURE__*/React.createElement(Secao, {
+    titulo: "Manuten\xE7\xE3o"
+  }, /*#__PURE__*/React.createElement(Acao, {
     onClick: () => {
       const v = !verLixeira;
       setVerLixeira(v);
@@ -5671,17 +5815,25 @@ function PainelAdm({
       buscar(v);
     },
     disabled: carregando,
-    style: {
-      padding: "11px 16px",
-      borderRadius: 8,
-      border: "1px solid " + (verLixeira ? "#185FA5" : "#bbb"),
-      background: verLixeira ? "#E6F1FB" : "#fff",
-      color: verLixeira ? "#0C447C" : "#555",
-      fontSize: 14,
-      fontWeight: 600,
-      cursor: "pointer"
-    }
-  }, verLixeira ? "← Ver registros ativos" : "Ver lixeira")), verLixeira ? /*#__PURE__*/React.createElement("p", {
+    cor: verLixeira ? "#0C447C" : undefined,
+    fundo: verLixeira ? "#E6F1FB" : undefined
+  }, verLixeira ? "← Ver registros ativos" : "Ver lixeira"), /*#__PURE__*/React.createElement(Acao, {
+    onClick: procurarOrfaos,
+    disabled: carregando,
+    dica: "Procura PDFs no Storage que nenhum documento referencia"
+  }, "Procurar PDFs \xF3rf\xE3os"), !verLixeira && /*#__PURE__*/React.createElement(Acao, {
+    onClick: excluirPeriodo,
+    disabled: carregando,
+    cor: "#A32D2D",
+    dica: "Os registros saem das listagens, mas podem ser restaurados"
+  }, "Enviar per\xEDodo \xE0 lixeira"), verLixeira && /*#__PURE__*/React.createElement(Acao, {
+    onClick: esvaziarLixeira,
+    disabled: carregando,
+    cor: "#fff",
+    fundo: "#A32D2D",
+    borda: "#A32D2D",
+    dica: "Exclus\xE3o definitiva: apaga registros, PDFs e fotos. N\xE3o tem volta."
+  }, "Esvaziar lixeira")), verLixeira ? /*#__PURE__*/React.createElement("p", {
     style: {
       fontSize: 12,
       color: "#0C447C",
@@ -5691,7 +5843,11 @@ function PainelAdm({
       borderRadius: 8,
       padding: "8px 10px"
     }
-  }, "Voc\xEA est\xE1 vendo a ", /*#__PURE__*/React.createElement("b", null, "lixeira"), ": registros que sa\xEDram das listagens mas continuam no banco, com o PDF preservado. \"Restaurar\" devolve o registro ao normal.") : /*#__PURE__*/React.createElement("p", {
+  }, "Voc\xEA est\xE1 vendo a ", /*#__PURE__*/React.createElement("b", null, "lixeira"), ": registros que sa\xEDram das listagens mas continuam no banco, com o PDF preservado. \"Restaurar\" devolve o registro ao normal.", /*#__PURE__*/React.createElement("br", null), /*#__PURE__*/React.createElement("b", {
+    style: {
+      color: "#A32D2D"
+    }
+  }, "\"Esvaziar lixeira\" apaga de vez"), " \u2014 registros, PDFs e fotos, sem recupera\xE7\xE3o. Confira os filtros antes.") : /*#__PURE__*/React.createElement("p", {
     style: {
       fontSize: 12,
       color: "#999",
