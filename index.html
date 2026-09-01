@@ -160,7 +160,7 @@ const {
   useRef,
   useEffect
 } = React;
-const APP_VERSION = "V15";
+const APP_VERSION = "V16";
 
 // ===== CONFIG SUPABASE =====
 const SUPABASE_URL = "https://atbkjmvogkuekrcoevkn.supabase.co";
@@ -855,7 +855,7 @@ async function subirFotos(registro, colaboradores) {
     const {
       foto,
       ...resto
-    } = c;
+    } = c; // 'foto_motivo' segue no resto, de propósito
     let foto_path = null;
     if (foto && registro && registro.cliente_id) {
       const caminho = registro.cliente_id + "/" + i + ".jpg";
@@ -1513,6 +1513,18 @@ const FOTO_QUALIDADE = 0.6; // ~60 KB por foto
 // frontal registra justamente quem estava com o celular na mão. A traseira fica
 // no botão de alternar, para quando o encarregado realmente estiver segurando.
 const CAM_PADRAO_FRONTAL = true;
+
+// Sair sem foto deixou de ser um toque só. Primeiro teste em campo: numa DTS de
+// quatro pessoas, uma saiu sem foto — e a moldura vazia no relatório não dizia se
+// o trabalhador tinha recusado (direito dele, previsto no termo que ele assina) ou
+// se o encarregado pulou a etapa. Ausência ambígua não serve de prova nem de gestão.
+//
+// NÃO se bloqueia a emissão: a cláusula 10 do termo assinado garante que recusar a
+// foto não impede o documento, e consentimento que não pode ser recusado não é
+// consentimento (art. 11 da LGPD). Travar derrubaria o valor de TODAS as fotos, não
+// só da que faltou. O caminho é o da regra 2.3: avisa, exige confirmação, registra.
+const MOTIVOS_SEM_FOTO = [["recusou", "O colaborador não autorizou a foto"], ["indisponivel", "A câmera não está disponível neste aparelho"]];
+const rotuloMotivo = m => (MOTIVOS_SEM_FOTO.find(x => x[0] === m) || [, null])[1] || (m ? "sem foto (" + m + ")" : "sem foto");
 function dataUrlParaBlob(dataUrl) {
   const [cabecalho, b64] = String(dataUrl || "").split(",");
   const mime = (cabecalho.match(/:(.*?);/) || [])[1] || "image/jpeg";
@@ -1557,7 +1569,7 @@ function RubricaModal({
   const canvasRef = useRef(null);
   const drawing = useRef(false);
   const tocou = useRef(false); // houve traço? evita salvar rubrica vazia
-  const [etapa, setEtapa] = useState("rubrica"); // rubrica | foto
+  const [etapa, setEtapa] = useState("rubrica"); // rubrica | foto | motivo
   const rubricaRef = useRef(null);
   const [frontal, setFrontal] = useState(CAM_PADRAO_FRONTAL);
   const [camErro, setCamErro] = useState("");
@@ -1652,11 +1664,12 @@ function RubricaModal({
     pararCamera();
     onClose();
   };
-  const concluir = foto => {
+  const concluir = (foto, motivo) => {
     pararCamera();
     onSave({
       rubrica: rubricaRef.current,
-      foto: foto || null
+      foto: foto || null,
+      fotoMotivo: foto ? null : motivo || null
     });
   };
   const salvarRubrica = () => {
@@ -1677,7 +1690,7 @@ function RubricaModal({
   const capturar = () => {
     const v = videoRef.current;
     if (!v || !v.videoWidth) {
-      concluir(null);
+      setEtapa("motivo");
       return;
     }
     const c = document.createElement("canvas");
@@ -1769,7 +1782,34 @@ function RubricaModal({
       flex: 1
     },
     onClick: salvarRubrica
-  }, querFoto ? "Continuar" : "Salvar"))) : /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("h3", null, "Confirme com a foto"), /*#__PURE__*/React.createElement("p", {
+  }, querFoto ? "Continuar" : "Salvar"))) : etapa === "motivo" ? /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("h3", null, "Por que sem foto?"), /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 12,
+      color: "#888",
+      margin: "0 0 10px"
+    }
+  }, "A rubrica j\xE1 est\xE1 salva. O documento sai normalmente \u2014 s\xF3 precisamos registrar o motivo, para o relat\xF3rio n\xE3o ficar com um vazio sem explica\xE7\xE3o."), MOTIVOS_SEM_FOTO.map(([valor, rotulo]) => /*#__PURE__*/React.createElement("button", {
+    key: valor,
+    className: "btn btn-light",
+    style: {
+      display: "block",
+      width: "100%",
+      textAlign: "left",
+      marginBottom: 8,
+      padding: "12px 14px"
+    },
+    onClick: () => concluir(null, valor)
+  }, rotulo)), /*#__PURE__*/React.createElement("button", {
+    className: "btn btn-light",
+    style: {
+      width: "100%",
+      marginTop: 4
+    },
+    onClick: () => {
+      setEtapa("foto");
+      abrirCamera(frontal);
+    }
+  }, "\u2190 Voltar e tirar a foto")) : /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("h3", null, "Confirme com a foto"), /*#__PURE__*/React.createElement("p", {
     style: {
       fontSize: 12,
       color: "#888",
@@ -1784,7 +1824,7 @@ function RubricaModal({
       fontSize: 13,
       color: "#7A5510"
     }
-  }, camErro, " A rubrica j\xE1 est\xE1 salva \u2014 siga sem foto.") : /*#__PURE__*/React.createElement("div", {
+  }, camErro, " A rubrica j\xE1 est\xE1 salva \u2014 siga sem foto, que fica registrada como c\xE2mera indispon\xEDvel.") : /*#__PURE__*/React.createElement("div", {
     style: {
       position: "relative",
       background: "#000",
@@ -1824,12 +1864,18 @@ function RubricaModal({
       flex: 1
     },
     onClick: trocarCamera
-  }, frontal ? "Usar traseira" : "Usar frontal"), /*#__PURE__*/React.createElement("button", {
+  }, frontal ? "Usar traseira" : "Usar frontal"), camErro ? /*#__PURE__*/React.createElement("button", {
+    className: "btn btn-blue",
+    style: {
+      flex: 1
+    },
+    onClick: () => concluir(null, "indisponivel")
+  }, "Seguir sem foto") : /*#__PURE__*/React.createElement("button", {
     className: "btn btn-light",
     style: {
       flex: 1
     },
-    onClick: () => concluir(null)
+    onClick: () => setEtapa("motivo")
   }, "Sem foto"), !camErro && /*#__PURE__*/React.createElement("button", {
     className: "btn btn-blue",
     style: {
@@ -2128,9 +2174,21 @@ function App({
     ...m,
     rubrica: d.rubrica,
     foto: d.foto || null,
+    fotoMotivo: d.fotoMotivo || null,
     rubricadoEm: new Date().toISOString(),
     tRelMs: Math.round(performance.now() - t0.current)
   } : m));
+
+  // Mesma ideia do alerta de risco Alto sem barreira de Controle (regra 2.3):
+  // não impede finalizar, mas obriga a olhar. Quem passar batido por aqui fez
+  // uma escolha, não um descuido.
+  function confirmarSemFoto() {
+    if (!FOTO_ATIVA) return true;
+    const sem = equipe.filter(m => !m.foto);
+    if (!sem.length) return true;
+    const lista = sem.map(m => "· " + m.nome + " — " + rotuloMotivo(m.fotoMotivo)).join("\n");
+    return window.confirm(sem.length + " de " + equipe.length + " colaborador(es) sem foto:\n\n" + lista + "\n\nO documento pode ser emitido assim. Continuar?");
+  }
 
   // monta as linhas da tabela (1 risco = 1 linha)
   const montarLinhas = () => {
@@ -2517,6 +2575,7 @@ function App({
       mostraToast("Falta a rubrica de: " + semRubrica.join(", "), true);
       return;
     }
+    if (!confirmarSemFoto()) return;
 
     // validação: nenhum risco pode ficar sem barreira alguma
     const linhasV = montarLinhas();
@@ -2569,7 +2628,8 @@ function App({
         nome: m.nome,
         rubricado_em: m.rubricadoEm || null,
         t_rel_ms: m.tRelMs == null ? null : m.tRelMs,
-        foto: m.foto || null
+        foto: m.foto || null,
+        foto_motivo: m.fotoMotivo || null
       }));
       const osNome = osEfetiva.replace(/[^\w.-]+/g, "_") || "sem_os";
 
@@ -3352,7 +3412,7 @@ function EquipeDoDocumento({
       const {
         data,
         error
-      } = await supa.from(cfg.colab).select("codigo,nome,ordem,rubricado_em,t_rel_ms,foto_path").eq(cfg.fk, item.id).order("ordem");
+      } = await supa.from(cfg.colab).select("codigo,nome,ordem,rubricado_em,t_rel_ms,foto_path,foto_motivo").eq(cfg.fk, item.id).order("ordem");
       if (!vivo) return;
       if (error) {
         setErro("Não foi possível carregar a equipe: " + error.message);
@@ -3476,10 +3536,11 @@ function EquipeDoDocumento({
     onClick: () => verFoto(l.foto_path)
   }, "Ver foto") : /*#__PURE__*/React.createElement("span", {
     style: {
-      color: "#bbb",
+      color: l.foto_motivo ? "#B07A16" : "#bbb",
       fontSize: 11
-    }
-  }, "sem foto"))), /*#__PURE__*/React.createElement("p", {
+    },
+    title: rotuloMotivo(l.foto_motivo)
+  }, l.foto_motivo === "recusou" ? "recusou a foto" : l.foto_motivo === "indisponivel" ? "sem câmera" : "sem foto"))), /*#__PURE__*/React.createElement("p", {
     style: {
       fontSize: 11,
       color: "#aaa",
@@ -4778,7 +4839,7 @@ function PainelAdm({
       const {
         data,
         error
-      } = await supa.from(cfg.colab).select("codigo,nome,ordem,rubricado_em,foto_path," + cfg.fk).in(cfg.fk, ids).order("ordem");
+      } = await supa.from(cfg.colab).select("codigo,nome,ordem,rubricado_em,foto_path,foto_motivo," + cfg.fk).in(cfg.fk, ids).order("ordem");
       if (error) throw error;
       (data || []).forEach(l => {
         (mapa[l[cfg.fk]] = mapa[l[cfg.fk]] || []).push(l);
@@ -4912,12 +4973,13 @@ function PainelAdm({
                 borderColor: rgb(0.85, 0.85, 0.85),
                 borderWidth: 0.8
               });
-              pg.drawText("sem foto", {
-                x: x + LARG / 2 - 20,
+              const txt = c.foto_motivo === "recusou" ? "não autorizou" : c.foto_motivo === "indisponivel" ? "sem câmera" : "sem foto";
+              pg.drawText(txt, {
+                x: x + LARG / 2 - fonte.widthOfTextAtSize(txt, 9) / 2,
                 y: y - (ALT - 34) / 2,
                 size: 9,
                 font: fonte,
-                color: rgb(0.65, 0.65, 0.65)
+                color: rgb(0.6, 0.6, 0.6)
               });
             }
             const base = y - (ALT - 34) - 12;
@@ -6193,9 +6255,21 @@ function AppPTQuente({
     ...m,
     rubrica: d.rubrica,
     foto: d.foto || null,
+    fotoMotivo: d.fotoMotivo || null,
     rubricadoEm: new Date().toISOString(),
     tRelMs: Math.round(performance.now() - t0.current)
   } : m));
+
+  // Mesma ideia do alerta de risco Alto sem barreira de Controle (regra 2.3):
+  // não impede finalizar, mas obriga a olhar. Quem passar batido por aqui fez
+  // uma escolha, não um descuido.
+  function confirmarSemFoto() {
+    if (!FOTO_ATIVA) return true;
+    const sem = equipe.filter(m => !m.foto);
+    if (!sem.length) return true;
+    const lista = sem.map(m => "· " + m.nome + " — " + rotuloMotivo(m.fotoMotivo)).join("\n");
+    return window.confirm(sem.length + " de " + equipe.length + " colaborador(es) sem foto:\n\n" + lista + "\n\nO documento pode ser emitido assim. Continuar?");
+  }
   useEffect(() => {
     (async () => {
       await limparAntigas();
@@ -6448,6 +6522,7 @@ function AppPTQuente({
       mostraToast("Falta rubrica de: " + semRub.join(", "), true);
       return;
     }
+    if (!confirmarSemFoto()) return;
     setSalvando(true);
     try {
       const hoje = diaLocal(agora.current);
@@ -6474,7 +6549,8 @@ function AppPTQuente({
         nome: m.nome,
         rubricado_em: m.rubricadoEm || null,
         t_rel_ms: m.tRelMs == null ? null : m.tRelMs,
-        foto: m.foto || null
+        foto: m.foto || null,
+        foto_motivo: m.fotoMotivo || null
       }));
       const osNome = osEfetiva.replace(/[^\w.-]+/g, "_") || "sem_os";
       const baseItem = {
@@ -8692,9 +8768,21 @@ function AppPT({
     ...m,
     rubrica: d.rubrica,
     foto: d.foto || null,
+    fotoMotivo: d.fotoMotivo || null,
     rubricadoEm: new Date().toISOString(),
     tRelMs: Math.round(performance.now() - t0.current)
   } : m));
+
+  // Mesma ideia do alerta de risco Alto sem barreira de Controle (regra 2.3):
+  // não impede finalizar, mas obriga a olhar. Quem passar batido por aqui fez
+  // uma escolha, não um descuido.
+  function confirmarSemFoto() {
+    if (!FOTO_ATIVA) return true;
+    const sem = equipe.filter(m => !m.foto);
+    if (!sem.length) return true;
+    const lista = sem.map(m => "· " + m.nome + " — " + rotuloMotivo(m.fotoMotivo)).join("\n");
+    return window.confirm(sem.length + " de " + equipe.length + " colaborador(es) sem foto:\n\n" + lista + "\n\nO documento pode ser emitido assim. Continuar?");
+  }
 
   // ===== Documentos do dia (deste PT, neste aparelho) =====
   const [recentes, setRecentes] = useState([]);
@@ -9272,6 +9360,7 @@ function AppPT({
       mostraToast("Falta rubrica de: " + semRub.join(", "), true);
       return;
     }
+    if (!confirmarSemFoto()) return;
     setSalvando(true);
     try {
       const hoje = diaLocal(agora.current);
@@ -9295,7 +9384,8 @@ function AppPT({
         nome: m.nome,
         rubricado_em: m.rubricadoEm || null,
         t_rel_ms: m.tRelMs == null ? null : m.tRelMs,
-        foto: m.foto || null
+        foto: m.foto || null,
+        foto_motivo: m.fotoMotivo || null
       }));
       const osNome = (osEfetiva || "sem_os").replace(/[^\w.-]+/g, "_");
       const localId = "pt_" + desc.tipo + "_" + Date.now();
