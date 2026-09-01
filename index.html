@@ -160,7 +160,7 @@ const {
   useRef,
   useEffect
 } = React;
-const APP_VERSION = "V17";
+const APP_VERSION = "V18";
 
 // ===== CONFIG SUPABASE =====
 const SUPABASE_URL = "https://atbkjmvogkuekrcoevkn.supabase.co";
@@ -1401,6 +1401,19 @@ function SeletorColaborador({
   const q = busca.trim().toLowerCase();
   const escolhidos = new Set((jaEscolhidos || []).filter(Boolean));
   const achados = !q ? [] : (efetivo || []).filter(c => !escolhidos.has(c.codigo)).filter(c => c.nome.toLowerCase().includes(q) || c.codigo.toLowerCase().includes(q)).slice(0, 8);
+
+  // REGRA (V18): com o efetivo no aparelho, só entra quem está nele.
+  //
+  // Até a V17 dava para digitar um nome qualquer, e a tela avisava que entraria
+  // "sem matrícula". Dois testes em campo mostraram o que acontece na prática: o
+  // encarregado digita, porque digitar é mais rápido que procurar — e o registro
+  // nasce sem matrícula, fora do filtro por pessoa. Aviso não segura ninguém;
+  // o caminho fácil tem que ser o certo.
+  //
+  // A ÚNICA exceção é o aparelho que nunca baixou o efetivo. Aí bloquear deixaria
+  // o app inutilizável em campo, e emitir DTS sem equipe é pior do que emitir com
+  // nome digitado. Fora esse caso, quem não está no efetivo entra pelo admin.
+  const temEfetivo = (efetivo || []).length > 0;
   const escolher = c => {
     onAdd({
       codigo: c.codigo,
@@ -1410,6 +1423,7 @@ function SeletorColaborador({
     setBusca("");
   };
   const digitar = () => {
+    if (temEfetivo) return; // trava: só da lista
     const v = busca.trim();
     if (!v) return;
     onAdd({
@@ -1431,7 +1445,7 @@ function SeletorColaborador({
       if (achados.length === 1) escolher(achados[0]);else digitar();
     },
     placeholder: placeholder || "Nome ou matrícula"
-  }), /*#__PURE__*/React.createElement("button", {
+  }), !temEfetivo && /*#__PURE__*/React.createElement("button", {
     className: "btn btn-light",
     onClick: digitar,
     disabled: !busca.trim()
@@ -1456,7 +1470,18 @@ function SeletorColaborador({
       color: "#888",
       fontSize: 12
     }
-  }, " \xB7 ", c.codigo, c.funcao ? " · " + c.funcao : "")))), q && !achados.length && /*#__PURE__*/React.createElement("p", {
+  }, " \xB7 ", c.codigo, c.funcao ? " · " + c.funcao : "")))), q && !achados.length && temEfetivo && /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 12,
+      color: "#A32D2D",
+      background: "#FDEDED",
+      border: "1px solid #F0C2C2",
+      borderRadius: 8,
+      padding: "9px 11px",
+      margin: "6px 0 0",
+      lineHeight: 1.45
+    }
+  }, /*#__PURE__*/React.createElement("b", null, "Ningu\xE9m no efetivo com \"", busca.trim(), "\"."), /*#__PURE__*/React.createElement("br", null), "S\xF3 \xE9 poss\xEDvel incluir quem est\xE1 cadastrado. Se a pessoa trabalhou hoje, pe\xE7a ao administrador para cadastr\xE1-la no efetivo \u2014 depois ela aparece aqui."), q && !achados.length && !temEfetivo && /*#__PURE__*/React.createElement("p", {
     style: {
       fontSize: 12,
       color: "#7A5510",
@@ -1466,7 +1491,7 @@ function SeletorColaborador({
       padding: "8px 10px",
       margin: "6px 0 0"
     }
-  }, "Ningu\xE9m no efetivo com \"", busca.trim(), "\". Se adicionar assim, entra ", /*#__PURE__*/React.createElement("b", null, "sem matr\xEDcula"), "e n\xE3o aparecer\xE1 na busca por colaborador do painel."), !(efetivo || []).length && /*#__PURE__*/React.createElement("p", {
+  }, "Este aparelho ainda n\xE3o baixou o efetivo, ent\xE3o d\xE1 para digitar o nome \u2014 mas ele entra ", /*#__PURE__*/React.createElement("b", null, "sem matr\xEDcula"), " e n\xE3o aparecer\xE1 na busca por colaborador."), !temEfetivo && /*#__PURE__*/React.createElement("p", {
     style: {
       fontSize: 12,
       color: "#999",
