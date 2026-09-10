@@ -160,7 +160,7 @@ const {
   useRef,
   useEffect
 } = React;
-const APP_VERSION = "V18";
+const APP_VERSION = "V19";
 
 // ===== CONFIG SUPABASE =====
 const SUPABASE_URL = "https://atbkjmvogkuekrcoevkn.supabase.co";
@@ -4108,7 +4108,7 @@ function montarHtmlIndice(pessoas, periodo, rotulo, totalDocs, semEquipe, nomePd
   // Escapar o "<" dos dados: sem isso, um "menor que" vindo do banco poderia
   // fechar a tag de script do arquivo gerado no meio do JSON.
   const dados = JSON.stringify(pessoas).replace(/</g, "\\u003c");
-  return "<!doctype html>\n" + "<html lang=\"pt-BR\"><head><meta charset=\"utf-8\">" + "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">" + "<title>Índice por colaborador — " + esc(rotulo) + " — " + esc(periodo) + "</title><style>" + "*{box-sizing:border-box}body{margin:0;font:15px/1.5 system-ui,Segoe UI,Arial,sans-serif;color:#222;background:#f5f6f8}" + ".topo{background:#1B3A6B;color:#fff;padding:18px 22px}.topo h1{margin:0;font-size:19px}" + ".topo p{margin:5px 0 0;font-size:13px;color:#c8d8ee}" + ".corpo{display:flex;gap:16px;padding:16px;flex-wrap:wrap;align-items:flex-start}" + ".lado{flex:0 0 300px;background:#fff;border:1px solid #e3e6ea;border-radius:10px;padding:10px;max-height:78vh;overflow:auto}" + ".lado input{width:100%;padding:9px;border:1px solid #ccc;border-radius:8px;font-size:14px;margin-bottom:8px}" + ".pessoa{padding:9px 10px;border-radius:8px;cursor:pointer;border-bottom:1px solid #f1f1f1}" + ".pessoa:hover{background:#f3f7fc}.pessoa.sel{background:#1B3A6B;color:#fff}" + ".pessoa b{display:block;font-size:14px}.pessoa span{font-size:12px;opacity:.75}" + ".painel{flex:1;min-width:340px;background:#fff;border:1px solid #e3e6ea;border-radius:10px;padding:16px}" + "table{width:100%;border-collapse:collapse;font-size:13px}" + "th{text-align:left;color:#666;font-weight:600;border-bottom:2px solid #eee;padding:7px 6px;font-size:12px}" + "td{padding:7px 6px;border-bottom:1px solid #f2f2f2;vertical-align:top}" + ".vazio{color:#888;padding:26px 0;text-align:center}" + ".resumo{background:#f7fafd;border:1px solid #dbe6f2;border-radius:8px;padding:10px 12px;margin-bottom:12px;font-size:13px}" + ".ver{color:#1B3A6B;font-weight:600;text-decoration:none;white-space:nowrap}.ver:hover{text-decoration:underline}" + ".aviso{background:#FFF6E5;border:1px solid #E7C77A;color:#7A5510;border-radius:8px;padding:9px 12px;margin:0 16px;font-size:12.5px}" + "@media print{.lado{display:none}.painel{border:0}}" + "</style></head><body>" + "<div class=\"topo\"><h1>Índice por colaborador — " + esc(rotulo) + "</h1>" + "<p>Período " + esc(periodo) + " · " + totalDocs + " documento(s) · " + pessoas.length + " colaborador(es)" + (semEquipe ? " · " + semEquipe + " documento(s) sem equipe registrada" : "") + "</p></div>" + (nomePdf ? "<div class=\"aviso\">Para os links abrirem, mantenha este arquivo <b>na mesma pasta</b> que <b>" + esc(nomePdf) + "</b>. Se o navegador não pular para a página, o número dela está escrito no link.</div>" : "") + "<div class=\"corpo\"><div class=\"lado\">" + "<input id=\"busca\" placeholder=\"Buscar nome ou matrícula\">" + "<div id=\"lista\"></div></div>" + "<div class=\"painel\" id=\"painel\"><div class=\"vazio\">Clique num nome à esquerda para ver os serviços em que a pessoa trabalhou.</div></div>" + "</div><script>\n" + "var PESSOAS=" + dados + ";\n" + "var PDF=" + JSON.stringify(nomePdf || null) + ";\n" + "var sel=null;\n" + "// Nome de colaborador pode ser digitado à mão em campo. Sem escapar, um nome\n" + "// com HTML dentro viraria markup — ou script — no arquivo que o jurídico abre.\n" + "function E(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;')\n" + "  .replace(/>/g,'&gt;').replace(/\"/g,'&quot;'); }\n" + "function desenharLista(){\n" + "  var q=(document.getElementById('busca').value||'').toLowerCase().trim();\n" + "  var alvo=document.getElementById('lista'); alvo.innerHTML='';\n" + "  PESSOAS.filter(function(p){ return !q || (p.nome||'').toLowerCase().indexOf(q)>=0 || (p.codigo||'').toLowerCase().indexOf(q)>=0; })\n" + "  .forEach(function(p,i){\n" + "    var d=document.createElement('div'); d.className='pessoa'+(sel===p?' sel':'');\n" + "    d.innerHTML='<b>'+E(p.nome)+'</b><span>'+(p.codigo?('Mat. '+E(p.codigo)):'sem matrícula')+' · '+p.docs.length+' documento(s)</span>';\n" + "    d.onclick=function(){ sel=p; desenharLista(); mostrar(p); };\n" + "    alvo.appendChild(d);\n" + "  });\n" + "}\n" + "function mostrar(p){\n" + "  var comFoto=p.docs.filter(function(d){return d.comFoto;}).length;\n" + "  var h='<div class=\"resumo\"><b>'+E(p.nome)+'</b>'+(p.codigo?(' · matrícula '+E(p.codigo)):' · sem matrícula')\n" + "    +'<br>'+p.docs.length+' documento(s) no período · '+comFoto+' com registro fotográfico</div>';\n" + "  h+='<table><tr><th>Data</th><th>OS</th><th>Serviço</th><th>Local</th><th>Responsável</th><th>Hora</th>'+(PDF?'<th>Documento</th>':'')+'</tr>';\n" + "  p.docs.slice().sort(function(a,b){return (a.data||'').localeCompare(b.data||'');}).forEach(function(d){\n" + "    var hora=d.hora?new Date(d.hora).toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'}):'';\n" + "    h+='<tr><td>'+E(d.data)+'</td><td>'+E(d.os)+'</td><td>'+E(d.servico)+(d.tipo?(' ('+E(d.tipo)+')'):'')\n" + "      +'</td><td>'+E(d.local)+'</td><td>'+E(d.lider)+'</td><td>'+E(hora)+'</td>';\n" + "    if(PDF){\n" + "      h+= d.pagina ? ('<td><a class=\"ver\" href=\"'+E(PDF)+'#page='+d.pagina+'\" target=\"_blank\">abrir · pág. '+d.pagina+'</a></td>')\n" + "                   : '<td style=\"color:#aaa\">sem PDF</td>';\n" + "    }\n" + "    h+='</tr>';\n" + "  });\n" + "  document.getElementById('painel').innerHTML=h+'</table>';\n" + "}\n" + "document.getElementById('busca').oninput=desenharLista;\n" + "desenharLista();\n" + "<\/script></body></html>";
+  return "<!doctype html>\n" + "<html lang=\"pt-BR\"><head><meta charset=\"utf-8\">" + "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">" + "<title>Índice por colaborador — " + esc(rotulo) + " — " + esc(periodo) + "</title><style>" + "*{box-sizing:border-box}body{margin:0;font:15px/1.5 system-ui,Segoe UI,Arial,sans-serif;color:#222;background:#f5f6f8}" + ".topo{background:#1B3A6B;color:#fff;padding:18px 22px}.topo h1{margin:0;font-size:19px}" + ".topo p{margin:5px 0 0;font-size:13px;color:#c8d8ee}" + ".corpo{display:flex;gap:16px;padding:16px;flex-wrap:wrap;align-items:flex-start}" + ".lado{flex:0 0 300px;background:#fff;border:1px solid #e3e6ea;border-radius:10px;padding:10px;max-height:78vh;overflow:auto}" + ".lado input{width:100%;padding:9px;border:1px solid #ccc;border-radius:8px;font-size:14px;margin-bottom:8px}" + ".pessoa{padding:9px 10px;border-radius:8px;cursor:pointer;border-bottom:1px solid #f1f1f1}" + ".pessoa:hover{background:#f3f7fc}.pessoa.sel{background:#1B3A6B;color:#fff}" + ".pessoa b{display:block;font-size:14px}.pessoa span{font-size:12px;opacity:.75}" + ".painel{flex:1;min-width:340px;background:#fff;border:1px solid #e3e6ea;border-radius:10px;padding:16px}" + "table{width:100%;border-collapse:collapse;font-size:13px}" + "th{text-align:left;color:#666;font-weight:600;border-bottom:2px solid #eee;padding:7px 6px;font-size:12px}" + "td{padding:7px 6px;border-bottom:1px solid #f2f2f2;vertical-align:top}" + ".vazio{color:#888;padding:26px 0;text-align:center}" + ".resumo{background:#f7fafd;border:1px solid #dbe6f2;border-radius:8px;padding:10px 12px;margin-bottom:12px;font-size:13px}" + ".ver{color:#1B3A6B;font-weight:600;text-decoration:none;white-space:nowrap}.ver:hover{text-decoration:underline}" + ".aviso{background:#FFF6E5;border:1px solid #E7C77A;color:#7A5510;border-radius:8px;padding:9px 12px;margin:0 16px;font-size:12.5px}" + "@media print{.lado{display:none}.painel{border:0}}" + "</style></head><body>" + "<div class=\"topo\"><h1>Índice por colaborador — " + esc(rotulo) + "</h1>" + "<p>Período " + esc(periodo) + " · " + totalDocs + " documento(s) · " + pessoas.length + " colaborador(es)" + (semEquipe ? " · " + semEquipe + " documento(s) sem equipe registrada" : "") + "</p></div>" + (nomePdf ? "<div class=\"aviso\">Para os links abrirem, mantenha este arquivo <b>na mesma pasta</b> que <b>" + esc(nomePdf) + "</b>. Se o navegador não pular para a página, o número dela está escrito no link.</div>" : "") + "<div class=\"corpo\"><div class=\"lado\">" + "<input id=\"busca\" placeholder=\"Buscar nome ou matrícula\">" + "<div id=\"lista\"></div></div>" + "<div class=\"painel\" id=\"painel\"><div class=\"vazio\">Clique num nome à esquerda para ver os serviços em que a pessoa trabalhou.</div></div>" + "</div><script>\n" + "var PESSOAS=" + dados + ";\n" + "var PDF=" + JSON.stringify(nomePdf || null) + ";\n" + "var sel=null;\n" + "// Nome de colaborador pode ser digitado à mão em campo. Sem escapar, um nome\n" + "// com HTML dentro viraria markup — ou script — no arquivo que o jurídico abre.\n" + "function E(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;')\n" + "  .replace(/>/g,'&gt;').replace(/\"/g,'&quot;'); }\n" + "function desenharLista(){\n" + "  var q=(document.getElementById('busca').value||'').toLowerCase().trim();\n" + "  var alvo=document.getElementById('lista'); alvo.innerHTML='';\n" + "  PESSOAS.filter(function(p){ return !q || (p.nome||'').toLowerCase().indexOf(q)>=0 || (p.codigo||'').toLowerCase().indexOf(q)>=0; })\n" + "  .forEach(function(p,i){\n" + "    var d=document.createElement('div'); d.className='pessoa'+(sel===p?' sel':'');\n" + "    d.innerHTML='<b>'+E(p.nome)+'</b><span>'+(p.codigo?('Mat. '+E(p.codigo)):'sem matrícula')+' · '+p.docs.length+' documento(s)</span>';\n" + "    d.onclick=function(){ sel=p; desenharLista(); mostrar(p); };\n" + "    alvo.appendChild(d);\n" + "  });\n" + "}\n" + "function mostrar(p){\n" + "  var comFoto=p.docs.filter(function(d){return d.comFoto;}).length;\n" + "  var h='<div class=\"resumo\"><b>'+E(p.nome)+'</b>'+(p.codigo?(' · matrícula '+E(p.codigo)):' · sem matrícula')\n" + "    +'<br>'+p.docs.length+' documento(s) no período · '+comFoto+' com registro fotográfico</div>';\n" + "  h+='<table><tr><th>Data</th><th>OS</th><th>Serviço</th><th>Local</th><th>Responsável</th><th>Hora</th>'+(PDF?'<th>Documento</th>':'')+'</tr>';\n" + "  p.docs.slice().sort(function(a,b){return (a.data||'').localeCompare(b.data||'');}).forEach(function(d){\n" + "    var hora=d.hora?new Date(d.hora).toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'}):'';\n" + "    h+='<tr><td>'+E(d.data)+'</td><td>'+E(d.os)+'</td><td>'+E(d.servico)+(d.tipo?(' ('+E(d.tipo)+')'):'')\n" + "      +'</td><td>'+E(d.local)+'</td><td>'+E(d.lider)+'</td><td>'+E(hora)+'</td>';\n" + "    if(PDF){\n" + "      h+= d.pagina ? ('<td><a class=\"ver\" href=\"'+E(PDF)+'#page='+d.pagina+'\" target=\"_blank\">documento · pág. '+d.pagina+'</a>'\n" + "        +(d.paginaFotos ? ('<br><a class=\"ver\" href=\"'+E(PDF)+'#page='+d.paginaFotos+'\" target=\"_blank\">fotos · pág. '+d.paginaFotos+'</a>') : '')\n" + "        +'</td>')\n" + "                   : '<td style=\"color:#aaa\">sem PDF</td>';\n" + "    }\n" + "    h+='</tr>';\n" + "  });\n" + "  document.getElementById('painel').innerHTML=h+'</table>';\n" + "}\n" + "document.getElementById('busca').oninput=desenharLista;\n" + "desenharLista();\n" + "<\/script></body></html>";
 }
 
 // Botão de ação do painel. Existe para os botões pararem de ser cada um de um
@@ -4873,6 +4873,132 @@ function PainelAdm({
     return mapa;
   }
 
+  // Acrescenta ao PDF, logo depois do documento, a folha com as fotos da equipe.
+  // Devolve quantos colaboradores ficaram sem foto. Usada pelo relatório com
+  // fotos e pelo pacote do período — um desenho só, para os dois não divergirem.
+  async function anexarFolhaFotos(unificado, fonte, fonteN, item, equipe) {
+    const {
+      rgb
+    } = PDFLib;
+    let semFoto = 0;
+    const pg = unificado.addPage([595.28, 841.89]);
+    const A = 841.89;
+    pg.drawText("REGISTRO FOTOGRÁFICO DA EQUIPE", {
+      x: 50,
+      y: A - 60,
+      size: 14,
+      font: fonteN,
+      color: rgb(0.1, 0.23, 0.42)
+    });
+    pg.drawText(cfg.rotulo + "  ·  OS " + (item.numero_os || "-") + "  ·  " + (item.data_atividade || (item.created_at || "").slice(0, 10)), {
+      x: 50,
+      y: A - 80,
+      size: 10,
+      font: fonte,
+      color: rgb(0.35, 0.35, 0.35)
+    });
+    pg.drawText(String(item[cfg.colTitulo] || "").slice(0, 90), {
+      x: 50,
+      y: A - 95,
+      size: 10,
+      font: fonte,
+      color: rgb(0.35, 0.35, 0.35)
+    });
+    pg.drawLine({
+      start: {
+        x: 50,
+        y: A - 105
+      },
+      end: {
+        x: 545,
+        y: A - 105
+      },
+      thickness: 0.8,
+      color: rgb(0.8, 0.8, 0.8)
+    });
+
+    // grade 3 x 4: 12 fotos por página basta para a equipe de uma frente
+    const COL = 3,
+      LARG = 160,
+      ALT = 150,
+      X0 = 50,
+      Y0 = A - 125;
+    for (let k = 0; k < equipe.length; k++) {
+      const c = equipe[k];
+      const col = k % COL,
+        lin = Math.floor(k / COL);
+      const x = X0 + col * (LARG + 8),
+        y = Y0 - lin * (ALT + 18);
+      if (y < 80) break; // não cabe mais nesta página
+      let desenhou = false;
+      if (c.foto_path) {
+        try {
+          const {
+            data: img
+          } = await supa.storage.from("rubricas").download(c.foto_path);
+          if (img) {
+            const jpg = await unificado.embedJpg(await img.arrayBuffer());
+            const esc = Math.min(LARG / jpg.width, (ALT - 34) / jpg.height);
+            pg.drawImage(jpg, {
+              x,
+              y: y - jpg.height * esc,
+              width: jpg.width * esc,
+              height: jpg.height * esc
+            });
+            desenhou = true;
+          }
+        } catch (_) {/* foto ilegível: cai no aviso abaixo */}
+      }
+      if (!desenhou) {
+        semFoto++;
+        pg.drawRectangle({
+          x,
+          y: y - (ALT - 34),
+          width: LARG,
+          height: ALT - 34,
+          borderColor: rgb(0.85, 0.85, 0.85),
+          borderWidth: 0.8
+        });
+        const txt = c.foto_motivo === "recusou" ? "não autorizou" : c.foto_motivo === "area_risco" ? "área de risco" : c.foto_motivo === "indisponivel" ? "sem câmera" : "sem foto";
+        pg.drawText(txt, {
+          x: x + LARG / 2 - fonte.widthOfTextAtSize(txt, 9) / 2,
+          y: y - (ALT - 34) / 2,
+          size: 9,
+          font: fonte,
+          color: rgb(0.6, 0.6, 0.6)
+        });
+      }
+      const base = y - (ALT - 34) - 12;
+      pg.drawText(String(c.nome || "").slice(0, 26), {
+        x,
+        y: base,
+        size: 8.5,
+        font: fonteN,
+        color: rgb(0.1, 0.1, 0.1)
+      });
+      pg.drawText((c.codigo ? "Mat. " + c.codigo : "sem matrícula") + (c.rubricado_em ? "  ·  " + new Date(c.rubricado_em).toLocaleTimeString("pt-BR", {
+        hour: "2-digit",
+        minute: "2-digit"
+      }) : ""), {
+        x,
+        y: base - 10,
+        size: 7.5,
+        font: fonte,
+        color: rgb(0.45, 0.45, 0.45)
+      });
+    }
+    if (!equipe.length) {
+      pg.drawText("Nenhum colaborador registrado neste documento.", {
+        x: 50,
+        y: A - 150,
+        size: 10,
+        font: fonte,
+        color: rgb(0.55, 0.55, 0.55)
+      });
+    }
+    return semFoto;
+  }
+
   // ---- RELATÓRIO COM FOTOS ----
   // Documento SEPARADO do que vai para a Iguá, de propósito. Poderia ser uma
   // caixinha "incluir fotos" no botão existente, mas aí um clique errado manda
@@ -4919,122 +5045,7 @@ function PainelAdm({
           pgs.forEach(x => unificado.addPage(x));
 
           // a folha de fotos vem logo DEPOIS do documento a que pertence
-          const equipe = equipes[item.id] || [];
-          const pg = unificado.addPage([595.28, 841.89]);
-          const A = 841.89;
-          pg.drawText("REGISTRO FOTOGRÁFICO DA EQUIPE", {
-            x: 50,
-            y: A - 60,
-            size: 14,
-            font: fonteN,
-            color: rgb(0.1, 0.23, 0.42)
-          });
-          pg.drawText(cfg.rotulo + "  ·  OS " + (item.numero_os || "-") + "  ·  " + (item.data_atividade || (item.created_at || "").slice(0, 10)), {
-            x: 50,
-            y: A - 80,
-            size: 10,
-            font: fonte,
-            color: rgb(0.35, 0.35, 0.35)
-          });
-          pg.drawText(String(item[cfg.colTitulo] || "").slice(0, 90), {
-            x: 50,
-            y: A - 95,
-            size: 10,
-            font: fonte,
-            color: rgb(0.35, 0.35, 0.35)
-          });
-          pg.drawLine({
-            start: {
-              x: 50,
-              y: A - 105
-            },
-            end: {
-              x: 545,
-              y: A - 105
-            },
-            thickness: 0.8,
-            color: rgb(0.8, 0.8, 0.8)
-          });
-
-          // grade 3 x 4: 12 fotos por página basta para a equipe de uma frente
-          const COL = 3,
-            LARG = 160,
-            ALT = 150,
-            X0 = 50,
-            Y0 = A - 125;
-          for (let k = 0; k < equipe.length; k++) {
-            const c = equipe[k];
-            const col = k % COL,
-              lin = Math.floor(k / COL);
-            const x = X0 + col * (LARG + 8),
-              y = Y0 - lin * (ALT + 18);
-            if (y < 80) break; // não cabe mais nesta página
-            let desenhou = false;
-            if (c.foto_path) {
-              try {
-                const {
-                  data: img
-                } = await supa.storage.from("rubricas").download(c.foto_path);
-                if (img) {
-                  const jpg = await unificado.embedJpg(await img.arrayBuffer());
-                  const esc = Math.min(LARG / jpg.width, (ALT - 34) / jpg.height);
-                  pg.drawImage(jpg, {
-                    x,
-                    y: y - jpg.height * esc,
-                    width: jpg.width * esc,
-                    height: jpg.height * esc
-                  });
-                  desenhou = true;
-                }
-              } catch (_) {/* foto ilegível: cai no aviso abaixo */}
-            }
-            if (!desenhou) {
-              semFoto++;
-              pg.drawRectangle({
-                x,
-                y: y - (ALT - 34),
-                width: LARG,
-                height: ALT - 34,
-                borderColor: rgb(0.85, 0.85, 0.85),
-                borderWidth: 0.8
-              });
-              const txt = c.foto_motivo === "recusou" ? "não autorizou" : c.foto_motivo === "area_risco" ? "área de risco" : c.foto_motivo === "indisponivel" ? "sem câmera" : "sem foto";
-              pg.drawText(txt, {
-                x: x + LARG / 2 - fonte.widthOfTextAtSize(txt, 9) / 2,
-                y: y - (ALT - 34) / 2,
-                size: 9,
-                font: fonte,
-                color: rgb(0.6, 0.6, 0.6)
-              });
-            }
-            const base = y - (ALT - 34) - 12;
-            pg.drawText(String(c.nome || "").slice(0, 26), {
-              x,
-              y: base,
-              size: 8.5,
-              font: fonteN,
-              color: rgb(0.1, 0.1, 0.1)
-            });
-            pg.drawText((c.codigo ? "Mat. " + c.codigo : "sem matrícula") + (c.rubricado_em ? "  ·  " + new Date(c.rubricado_em).toLocaleTimeString("pt-BR", {
-              hour: "2-digit",
-              minute: "2-digit"
-            }) : ""), {
-              x,
-              y: base - 10,
-              size: 7.5,
-              font: fonte,
-              color: rgb(0.45, 0.45, 0.45)
-            });
-          }
-          if (!equipe.length) {
-            pg.drawText("Nenhum colaborador registrado neste documento.", {
-              x: 50,
-              y: A - 150,
-              size: 10,
-              font: fonte,
-              color: rgb(0.55, 0.55, 0.55)
-            });
-          }
+          semFoto += await anexarFolhaFotos(unificado, fonte, fonteN, item, equipes[item.id] || []);
           ok++;
         } catch (e) {
           falhas++;
@@ -5153,7 +5164,11 @@ function PainelAdm({
     }
   }
 
-  // ---- PACOTE DO MÊS: índice navegável + PDF único, ligados por página ----
+  // ---- PACOTE DO MÊS: índice navegável + PDF COM FOTOS, ligados por página ----
+  // Desde a V19 o PDF do pacote é o de uso interno: cada documento seguido da
+  // folha de fotos da equipe. O índice aponta para as duas páginas — o documento
+  // e as fotos. O único arquivo sem fotos é o "Documentos (PDF único)", que é o
+  // que vai para a Iguá; o pacote é acervo interno e não sai da empresa.
   // Gera os dois juntos DE PROPÓSITO: é a única forma de o número da página no
   // índice bater com o PDF. Gerar em momentos diferentes, com filtros diferentes,
   // produziria um índice que aponta para a página errada — pior que não ter link.
@@ -5181,16 +5196,21 @@ function PainelAdm({
         return;
       }
       const equipes = await equipesDe(docs);
-      const base = cfg.prefixo + "_" + (de || "inicio") + "_a_" + (ate || "hoje");
+      const base = cfg.prefixo + "_COM_FOTOS_" + (de || "inicio") + "_a_" + (ate || "hoje");
       const nomePdf = base + ".pdf";
       const {
-        PDFDocument
+        PDFDocument,
+        StandardFonts
       } = PDFLib;
       const unificado = await PDFDocument.create();
+      const fonte = await unificado.embedFont(StandardFonts.Helvetica);
+      const fonteN = await unificado.embedFont(StandardFonts.HelveticaBold);
       const pagina = {}; // id do documento -> página em que começa
+      const paginaFotos = {}; // id do documento -> página da folha de fotos
       let ok = 0,
         falhas = 0,
-        processados = 0;
+        processados = 0,
+        semFoto = 0;
       setProg({
         feitos: 0,
         total: docs.length,
@@ -5209,6 +5229,8 @@ function PainelAdm({
             pagina[item.id] = unificado.getPageCount() + 1; // 1-based, como o leitor mostra
             const pgs = await unificado.copyPages(doc, doc.getPageIndices());
             pgs.forEach(x => unificado.addPage(x));
+            paginaFotos[item.id] = unificado.getPageCount() + 1;
+            semFoto += await anexarFolhaFotos(unificado, fonte, fonteN, item, equipes[item.id] || []);
             ok++;
           } catch (e) {
             falhas++;
@@ -5252,7 +5274,8 @@ function PainelAdm({
             tipo: d.tipo || "",
             hora: c.rubricado_em || "",
             comFoto: !!c.foto_path,
-            pagina: pagina[d.id] || null
+            pagina: pagina[d.id] || null,
+            paginaFotos: paginaFotos[d.id] || null
           });
         }
       }
@@ -5265,7 +5288,7 @@ function PainelAdm({
       if (ok) baixarArquivo(new Blob([await unificado.save()], {
         type: "application/pdf"
       }), nomePdf);
-      setMsg("Pacote gerado: " + base + ".html + " + nomePdf + " — " + lista2.length + " colaborador(es), " + ok + " documento(s)" + (falhas ? ", " + falhas + " sem PDF" : "") + (semEquipe ? ", " + semEquipe + " sem equipe" : "") + ". Guarde os dois na MESMA pasta.");
+      setMsg("Pacote gerado: " + base + ".html + " + nomePdf + " — " + lista2.length + " colaborador(es), " + ok + " documento(s) com fotos" + (falhas ? ", " + falhas + " sem PDF" : "") + (semEquipe ? ", " + semEquipe + " sem equipe" : "") + (semFoto ? ", " + semFoto + " colaborador(es) sem foto" : "") + ". Guarde os dois na MESMA pasta.");
     } catch (e) {
       setMsg("Erro ao montar o pacote: " + e.message);
     } finally {
@@ -5931,11 +5954,11 @@ function PainelAdm({
     disabled: carregando,
     cor: "#0C447C",
     fundo: "#E6F1FB",
-    dica: "\xCDndice + PDF do per\xEDodo, ligados: clicar no servi\xE7o abre o documento na p\xE1gina certa"
-  }, "Pacote do per\xEDodo"), lista.length > 0 && /*#__PURE__*/React.createElement(Acao, {
+    dica: "\xCDndice + PDF com as fotos da equipe, ligados por p\xE1gina. Uso interno \u2014 n\xE3o \xE9 o arquivo da Igu\xE1."
+  }, "Pacote do per\xEDodo (com fotos)"), lista.length > 0 && /*#__PURE__*/React.createElement(Acao, {
     onClick: baixarTodos,
     disabled: carregando,
-    dica: "S\xF3 os documentos oficiais, sem fotos \u2014 \xE9 este que vai para a Igu\xE1"
+    dica: "O \xFAnico relat\xF3rio SEM fotos: s\xF3 os documentos oficiais. \xC9 este que vai para a Igu\xE1."
   }, "Documentos (PDF \xFAnico)"), lista.length > 0 && /*#__PURE__*/React.createElement(Acao, {
     onClick: baixarComFotos,
     disabled: carregando,
