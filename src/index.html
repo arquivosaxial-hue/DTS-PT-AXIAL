@@ -153,7 +153,7 @@
 
   <script type="text/babel">
     const { useState, useRef, useEffect } = React;
-    const APP_VERSION = "V18";
+    const APP_VERSION = "V19";
 
     // ===== CONFIG SUPABASE =====
     const SUPABASE_URL = "https://atbkjmvogkuekrcoevkn.supabase.co";
@@ -2322,7 +2322,9 @@
 +"    h+='<tr><td>'+E(d.data)+'</td><td>'+E(d.os)+'</td><td>'+E(d.servico)+(d.tipo?(' ('+E(d.tipo)+')'):'')\n"
 +"      +'</td><td>'+E(d.local)+'</td><td>'+E(d.lider)+'</td><td>'+E(hora)+'</td>';\n"
 +"    if(PDF){\n"
-+"      h+= d.pagina ? ('<td><a class=\"ver\" href=\"'+E(PDF)+'#page='+d.pagina+'\" target=\"_blank\">abrir · pág. '+d.pagina+'</a></td>')\n"
++"      h+= d.pagina ? ('<td><a class=\"ver\" href=\"'+E(PDF)+'#page='+d.pagina+'\" target=\"_blank\">documento · pág. '+d.pagina+'</a>'\n"
++"        +(d.paginaFotos ? ('<br><a class=\"ver\" href=\"'+E(PDF)+'#page='+d.paginaFotos+'\" target=\"_blank\">fotos · pág. '+d.paginaFotos+'</a>') : '')\n"
++"        +'</td>')\n"
 +"                   : '<td style=\"color:#aaa\">sem PDF</td>';\n"
 +"    }\n"
 +"    h+='</tr>';\n"
@@ -2870,6 +2872,64 @@
         return mapa;
       }
 
+      // Acrescenta ao PDF, logo depois do documento, a folha com as fotos da equipe.
+      // Devolve quantos colaboradores ficaram sem foto. Usada pelo relatório com
+      // fotos e pelo pacote do período — um desenho só, para os dois não divergirem.
+      async function anexarFolhaFotos(unificado, fonte, fonteN, item, equipe){
+        const { rgb }=PDFLib;
+        let semFoto=0;
+        const pg=unificado.addPage([595.28, 841.89]);
+        const A=841.89;
+        pg.drawText("REGISTRO FOTOGRÁFICO DA EQUIPE", { x:50, y:A-60, size:14, font:fonteN, color:rgb(0.1,0.23,0.42) });
+        pg.drawText(cfg.rotulo+"  ·  OS "+(item.numero_os||"-")
+          +"  ·  "+(item.data_atividade||(item.created_at||"").slice(0,10)),
+          { x:50, y:A-80, size:10, font:fonte, color:rgb(0.35,0.35,0.35) });
+        pg.drawText(String(item[cfg.colTitulo]||"").slice(0,90),
+          { x:50, y:A-95, size:10, font:fonte, color:rgb(0.35,0.35,0.35) });
+        pg.drawLine({ start:{x:50,y:A-105}, end:{x:545,y:A-105}, thickness:0.8, color:rgb(0.8,0.8,0.8) });
+
+        // grade 3 x 4: 12 fotos por página basta para a equipe de uma frente
+        const COL=3, LARG=160, ALT=150, X0=50, Y0=A-125;
+        for(let k=0;k<equipe.length;k++){
+          const c=equipe[k];
+          const col=k%COL, lin=Math.floor(k/COL);
+          const x=X0+col*(LARG+8), y=Y0-lin*(ALT+18);
+          if(y<80) break;                       // não cabe mais nesta página
+          let desenhou=false;
+          if(c.foto_path){
+            try{
+              const { data:img }=await supa.storage.from("rubricas").download(c.foto_path);
+              if(img){
+                const jpg=await unificado.embedJpg(await img.arrayBuffer());
+                const esc=Math.min(LARG/jpg.width, (ALT-34)/jpg.height);
+                pg.drawImage(jpg, { x, y:y-jpg.height*esc, width:jpg.width*esc, height:jpg.height*esc });
+                desenhou=true;
+              }
+            }catch(_){ /* foto ilegível: cai no aviso abaixo */ }
+          }
+          if(!desenhou){
+            semFoto++;
+            pg.drawRectangle({ x, y:y-(ALT-34), width:LARG, height:ALT-34,
+              borderColor:rgb(0.85,0.85,0.85), borderWidth:0.8 });
+            const txt = c.foto_motivo==="recusou" ? "não autorizou"
+                      : c.foto_motivo==="area_risco" ? "área de risco"
+                      : c.foto_motivo==="indisponivel" ? "sem câmera" : "sem foto";
+            pg.drawText(txt, { x:x+LARG/2-fonte.widthOfTextAtSize(txt,9)/2,
+              y:y-(ALT-34)/2, size:9, font:fonte, color:rgb(0.6,0.6,0.6) });
+          }
+          const base=y-(ALT-34)-12;
+          pg.drawText(String(c.nome||"").slice(0,26), { x, y:base, size:8.5, font:fonteN, color:rgb(0.1,0.1,0.1) });
+          pg.drawText((c.codigo?("Mat. "+c.codigo):"sem matrícula")
+            +(c.rubricado_em?("  ·  "+new Date(c.rubricado_em).toLocaleTimeString("pt-BR",{hour:"2-digit",minute:"2-digit"})):""),
+            { x, y:base-10, size:7.5, font:fonte, color:rgb(0.45,0.45,0.45) });
+        }
+        if(!equipe.length){
+          pg.drawText("Nenhum colaborador registrado neste documento.",
+            { x:50, y:A-150, size:10, font:fonte, color:rgb(0.55,0.55,0.55) });
+        }
+        return semFoto;
+      }
+
       // ---- RELATÓRIO COM FOTOS ----
       // Documento SEPARADO do que vai para a Iguá, de propósito. Poderia ser uma
       // caixinha "incluir fotos" no botão existente, mas aí um clique errado manda
@@ -2898,56 +2958,7 @@
               pgs.forEach(x=>unificado.addPage(x));
 
               // a folha de fotos vem logo DEPOIS do documento a que pertence
-              const equipe=equipes[item.id]||[];
-              const pg=unificado.addPage([595.28, 841.89]);
-              const A=841.89;
-              pg.drawText("REGISTRO FOTOGRÁFICO DA EQUIPE", { x:50, y:A-60, size:14, font:fonteN, color:rgb(0.1,0.23,0.42) });
-              pg.drawText(cfg.rotulo+"  ·  OS "+(item.numero_os||"-")
-                +"  ·  "+(item.data_atividade||(item.created_at||"").slice(0,10)),
-                { x:50, y:A-80, size:10, font:fonte, color:rgb(0.35,0.35,0.35) });
-              pg.drawText(String(item[cfg.colTitulo]||"").slice(0,90),
-                { x:50, y:A-95, size:10, font:fonte, color:rgb(0.35,0.35,0.35) });
-              pg.drawLine({ start:{x:50,y:A-105}, end:{x:545,y:A-105}, thickness:0.8, color:rgb(0.8,0.8,0.8) });
-
-              // grade 3 x 4: 12 fotos por página basta para a equipe de uma frente
-              const COL=3, LARG=160, ALT=150, X0=50, Y0=A-125;
-              for(let k=0;k<equipe.length;k++){
-                const c=equipe[k];
-                const col=k%COL, lin=Math.floor(k/COL);
-                const x=X0+col*(LARG+8), y=Y0-lin*(ALT+18);
-                if(y<80) break;                       // não cabe mais nesta página
-                let desenhou=false;
-                if(c.foto_path){
-                  try{
-                    const { data:img }=await supa.storage.from("rubricas").download(c.foto_path);
-                    if(img){
-                      const jpg=await unificado.embedJpg(await img.arrayBuffer());
-                      const esc=Math.min(LARG/jpg.width, (ALT-34)/jpg.height);
-                      pg.drawImage(jpg, { x, y:y-jpg.height*esc, width:jpg.width*esc, height:jpg.height*esc });
-                      desenhou=true;
-                    }
-                  }catch(_){ /* foto ilegível: cai no aviso abaixo */ }
-                }
-                if(!desenhou){
-                  semFoto++;
-                  pg.drawRectangle({ x, y:y-(ALT-34), width:LARG, height:ALT-34,
-                    borderColor:rgb(0.85,0.85,0.85), borderWidth:0.8 });
-                  const txt = c.foto_motivo==="recusou" ? "não autorizou"
-                            : c.foto_motivo==="area_risco" ? "área de risco"
-                            : c.foto_motivo==="indisponivel" ? "sem câmera" : "sem foto";
-                  pg.drawText(txt, { x:x+LARG/2-fonte.widthOfTextAtSize(txt,9)/2,
-                    y:y-(ALT-34)/2, size:9, font:fonte, color:rgb(0.6,0.6,0.6) });
-                }
-                const base=y-(ALT-34)-12;
-                pg.drawText(String(c.nome||"").slice(0,26), { x, y:base, size:8.5, font:fonteN, color:rgb(0.1,0.1,0.1) });
-                pg.drawText((c.codigo?("Mat. "+c.codigo):"sem matrícula")
-                  +(c.rubricado_em?("  ·  "+new Date(c.rubricado_em).toLocaleTimeString("pt-BR",{hour:"2-digit",minute:"2-digit"})):""),
-                  { x, y:base-10, size:7.5, font:fonte, color:rgb(0.45,0.45,0.45) });
-              }
-              if(!equipe.length){
-                pg.drawText("Nenhum colaborador registrado neste documento.",
-                  { x:50, y:A-150, size:10, font:fonte, color:rgb(0.55,0.55,0.55) });
-              }
+              semFoto+=await anexarFolhaFotos(unificado, fonte, fonteN, item, equipes[item.id]||[]);
               ok++;
             }catch(e){ falhas++; console.warn("falha em",item.pdf_path,e.message); }
             processados++;
@@ -3022,7 +3033,11 @@
         finally{ setCarregando(false); }
       }
 
-      // ---- PACOTE DO MÊS: índice navegável + PDF único, ligados por página ----
+      // ---- PACOTE DO MÊS: índice navegável + PDF COM FOTOS, ligados por página ----
+      // Desde a V19 o PDF do pacote é o de uso interno: cada documento seguido da
+      // folha de fotos da equipe. O índice aponta para as duas páginas — o documento
+      // e as fotos. O único arquivo sem fotos é o "Documentos (PDF único)", que é o
+      // que vai para a Iguá; o pacote é acervo interno e não sai da empresa.
       // Gera os dois juntos DE PROPÓSITO: é a única forma de o número da página no
       // índice bater com o PDF. Gerar em momentos diferentes, com filtros diferentes,
       // produziria um índice que aponta para a página errada — pior que não ter link.
@@ -3044,13 +3059,16 @@
           if(!docs || !docs.length){ setMsg("Nada a exportar com os filtros atuais."); return; }
           const equipes=await equipesDe(docs);
 
-          const base=cfg.prefixo+"_"+(de||"inicio")+"_a_"+(ate||"hoje");
+          const base=cfg.prefixo+"_COM_FOTOS_"+(de||"inicio")+"_a_"+(ate||"hoje");
           const nomePdf=base+".pdf";
 
-          const { PDFDocument }=PDFLib;
+          const { PDFDocument, StandardFonts }=PDFLib;
           const unificado=await PDFDocument.create();
+          const fonte=await unificado.embedFont(StandardFonts.Helvetica);
+          const fonteN=await unificado.embedFont(StandardFonts.HelveticaBold);
           const pagina={};                 // id do documento -> página em que começa
-          let ok=0, falhas=0, processados=0;
+          const paginaFotos={};            // id do documento -> página da folha de fotos
+          let ok=0, falhas=0, processados=0, semFoto=0;
           setProg({feitos:0,total:docs.length,restante:null,rotulo:"Montando o pacote do período"});
 
           for(const item of docs){
@@ -3062,6 +3080,8 @@
                 pagina[item.id]=unificado.getPageCount()+1;   // 1-based, como o leitor mostra
                 const pgs=await unificado.copyPages(doc, doc.getPageIndices());
                 pgs.forEach(x=>unificado.addPage(x));
+                paginaFotos[item.id]=unificado.getPageCount()+1;
+                semFoto+=await anexarFolhaFotos(unificado, fonte, fonteN, item, equipes[item.id]||[]);
                 ok++;
               }catch(e){ falhas++; console.warn("falha em",item.pdf_path,e.message); }
             }
@@ -3088,6 +3108,7 @@
                 local:d[cfg.colLocal]||"", lider:d[cfg.colLider]||"",
                 tipo:d.tipo||"", hora:c.rubricado_em||"", comFoto:!!c.foto_path,
                 pagina:pagina[d.id]||null,
+                paginaFotos:paginaFotos[d.id]||null,
               });
             }
           }
@@ -3099,8 +3120,9 @@
           if(ok) baixarArquivo(new Blob([await unificado.save()],{type:"application/pdf"}), nomePdf);
 
           setMsg("Pacote gerado: "+base+".html + "+nomePdf+" — "+lista2.length+" colaborador(es), "
-            +ok+" documento(s)"+(falhas?(", "+falhas+" sem PDF"):"")
+            +ok+" documento(s) com fotos"+(falhas?(", "+falhas+" sem PDF"):"")
             +(semEquipe?(", "+semEquipe+" sem equipe"):"")
+            +(semFoto?(", "+semFoto+" colaborador(es) sem foto"):"")
             +". Guarde os dois na MESMA pasta.");
         }catch(e){ setMsg("Erro ao montar o pacote: "+e.message); }
         finally{ setCarregando(false); setProg(null); }
@@ -3397,10 +3419,10 @@
               dica="Só o índice, alguns KB: clique no nome e veja tudo o que a pessoa assinou">
               Índice por colaborador</Acao>
             <Acao onClick={baixarPacoteMes} disabled={carregando} cor="#0C447C" fundo="#E6F1FB"
-              dica="Índice + PDF do período, ligados: clicar no serviço abre o documento na página certa">
-              Pacote do período</Acao>
+              dica="Índice + PDF com as fotos da equipe, ligados por página. Uso interno — não é o arquivo da Iguá.">
+              Pacote do período (com fotos)</Acao>
             {lista.length>0 && <Acao onClick={baixarTodos} disabled={carregando}
-              dica="Só os documentos oficiais, sem fotos — é este que vai para a Iguá">
+              dica="O único relatório SEM fotos: só os documentos oficiais. É este que vai para a Iguá.">
               Documentos (PDF único)</Acao>}
             {lista.length>0 && <Acao onClick={baixarComFotos} disabled={carregando} cor="#7A5510" fundo="#FFF6E5"
               dica="Cada documento seguido de uma folha com as fotos da equipe. Uso interno.">
