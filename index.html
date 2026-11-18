@@ -160,7 +160,7 @@ const {
   useRef,
   useEffect
 } = React;
-const APP_VERSION = "V19";
+const APP_VERSION = "V20";
 
 // ===== CONFIG SUPABASE =====
 const SUPABASE_URL = "https://atbkjmvogkuekrcoevkn.supabase.co";
@@ -3591,6 +3591,10 @@ function TelaEfetivo({
   const [msg, setMsg] = useState("");
   const [erro, setErro] = useState("");
   const [busca, setBusca] = useState("");
+  // Começa em "ativo": a lista cresce com o tempo e quem saiu nunca é apagado
+  // (ver o comentário da tabela), então sem filtro o desligado vai dominando a
+  // tela. Quem precisa dele — para reativar ou conferir histórico — troca aqui.
+  const [situacaoFiltro, setSituacaoFiltro] = useState("ativo");
   const [novo, setNovo] = useState({
     codigo: "",
     nome: "",
@@ -3653,9 +3657,17 @@ function TelaEfetivo({
   }, []);
   const filtrada = (() => {
     const q = busca.trim().toLowerCase();
-    if (!q) return lista;
-    return lista.filter(c => String(c.nome || "").toLowerCase().includes(q) || String(c.codigo || "").toLowerCase().includes(q) || String(c.funcao || "").toLowerCase().includes(q));
+    const porSituacao = situacaoFiltro === "todos" ? lista : lista.filter(c => (c.situacao || "ativo") === situacaoFiltro);
+    if (!q) return porSituacao;
+    return porSituacao.filter(c => String(c.nome || "").toLowerCase().includes(q) || String(c.codigo || "").toLowerCase().includes(q) || String(c.funcao || "").toLowerCase().includes(q));
   })();
+
+  // contagem por situação, para rotular os botões sem o admin precisar contar
+  const porSit = lista.reduce((acc, c) => {
+    const s = c.situacao || "ativo";
+    acc[s] = (acc[s] || 0) + 1;
+    return acc;
+  }, {});
   const ativos = lista.filter(c => c.situacao === "ativo").length;
   async function salvarUm() {
     const codigo = novo.codigo.trim(),
@@ -3999,7 +4011,36 @@ function TelaEfetivo({
     }
   }, "Matr\xEDcula que j\xE1 existe \xE9 atualizada, n\xE3o duplicada.")), /*#__PURE__*/React.createElement("div", {
     className: "section"
-  }, /*#__PURE__*/React.createElement("h2", null, "Cadastrados"), /*#__PURE__*/React.createElement("input", {
+  }, /*#__PURE__*/React.createElement("h2", null, "Cadastrados"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 6,
+      flexWrap: "wrap",
+      margin: "0 0 10px"
+    }
+  }, [["ativo", "Ativos"], ["afastado", "Afastados"], ["desligado", "Desligados"], ["todos", "Todos"]].map(([valor, rotulo]) => {
+    const sel = situacaoFiltro === valor;
+    const quantos = valor === "todos" ? lista.length : porSit[valor] || 0;
+    return /*#__PURE__*/React.createElement("button", {
+      key: valor,
+      onClick: () => setSituacaoFiltro(valor),
+      style: {
+        padding: "7px 13px",
+        borderRadius: 20,
+        fontSize: 13,
+        fontWeight: 600,
+        cursor: "pointer",
+        border: "1px solid " + (sel ? "#185FA5" : "#ccd2d8"),
+        background: sel ? "#185FA5" : "#fff",
+        color: sel ? "#fff" : "#44505c"
+      }
+    }, rotulo, " ", /*#__PURE__*/React.createElement("span", {
+      style: {
+        opacity: .75,
+        fontWeight: 400
+      }
+    }, quantos));
+  })), /*#__PURE__*/React.createElement("input", {
     type: "text",
     value: busca,
     onChange: e => setBusca(e.target.value),
@@ -4018,7 +4059,14 @@ function TelaEfetivo({
       color: "#888",
       fontSize: 13
     }
-  }, "Ningu\xE9m encontrado."), filtrada.map(c => /*#__PURE__*/React.createElement("div", {
+  }, "Ningu\xE9m encontrado", situacaoFiltro !== "todos" && /*#__PURE__*/React.createElement("span", null, " entre os ", /*#__PURE__*/React.createElement("b", null, situacaoFiltro === "ativo" ? "ativos" : situacaoFiltro + "s")), busca.trim() && /*#__PURE__*/React.createElement("span", null, " com \"", busca.trim(), "\""), ".", situacaoFiltro !== "todos" && /*#__PURE__*/React.createElement("a", {
+    onClick: () => setSituacaoFiltro("todos"),
+    style: {
+      color: "#185FA5",
+      cursor: "pointer",
+      marginLeft: 6
+    }
+  }, "Ver todos")), filtrada.map(c => /*#__PURE__*/React.createElement("div", {
     key: c.codigo,
     style: {
       display: "flex",

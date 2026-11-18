@@ -1,0 +1,10 @@
+# dependências das ferramentas de desenvolvimento — nunca vão para o ar
+ferramentas/node_modules/
+
+# lixo de sistema
+Thumbs.db
+.DS_Store
+
+# arquivos temporários de teste (ver CLAUDE.md: previews, índices de teste)
+_*.html
+_*.pdf

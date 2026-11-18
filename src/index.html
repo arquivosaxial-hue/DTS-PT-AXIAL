@@ -153,7 +153,7 @@
 
   <script type="text/babel">
     const { useState, useRef, useEffect } = React;
-    const APP_VERSION = "V19";
+    const APP_VERSION = "V20";
 
     // ===== CONFIG SUPABASE =====
     const SUPABASE_URL = "https://atbkjmvogkuekrcoevkn.supabase.co";
@@ -1970,6 +1970,10 @@
       const [msg,setMsg]=useState("");
       const [erro,setErro]=useState("");
       const [busca,setBusca]=useState("");
+      // Começa em "ativo": a lista cresce com o tempo e quem saiu nunca é apagado
+      // (ver o comentário da tabela), então sem filtro o desligado vai dominando a
+      // tela. Quem precisa dele — para reativar ou conferir histórico — troca aqui.
+      const [situacaoFiltro,setSituacaoFiltro]=useState("ativo");
       const [novo,setNovo]=useState({codigo:"",nome:"",funcao:""});
       const [texto,setTexto]=useState("");          // planilha colada
       const [previa,setPrevia]=useState(null);      // {linhas, ruins}
@@ -2010,12 +2014,19 @@
 
       const filtrada = (()=>{
         const q=busca.trim().toLowerCase();
-        if(!q) return lista;
-        return lista.filter(c=>
+        const porSituacao = situacaoFiltro==="todos"
+          ? lista
+          : lista.filter(c=>(c.situacao||"ativo")===situacaoFiltro);
+        if(!q) return porSituacao;
+        return porSituacao.filter(c=>
           String(c.nome||"").toLowerCase().includes(q) ||
           String(c.codigo||"").toLowerCase().includes(q) ||
           String(c.funcao||"").toLowerCase().includes(q));
       })();
+
+      // contagem por situação, para rotular os botões sem o admin precisar contar
+      const porSit = lista.reduce((acc,c)=>{ const s=c.situacao||"ativo";
+        acc[s]=(acc[s]||0)+1; return acc; }, {});
 
       const ativos = lista.filter(c=>c.situacao==="ativo").length;
 
@@ -2207,11 +2218,36 @@
         {/* ---------------- lista ---------------- */}
         <div className="section">
           <h2>Cadastrados</h2>
+          <div style={{display:"flex",gap:6,flexWrap:"wrap",margin:"0 0 10px"}}>
+            {[["ativo","Ativos"],["afastado","Afastados"],["desligado","Desligados"],["todos","Todos"]]
+              .map(([valor,rotulo])=>{
+                const sel = situacaoFiltro===valor;
+                const quantos = valor==="todos" ? lista.length : (porSit[valor]||0);
+                return (
+                  <button key={valor} onClick={()=>setSituacaoFiltro(valor)}
+                    style={{padding:"7px 13px",borderRadius:20,fontSize:13,fontWeight:600,
+                            cursor:"pointer",
+                            border:"1px solid "+(sel?"#185FA5":"#ccd2d8"),
+                            background:sel?"#185FA5":"#fff",
+                            color:sel?"#fff":"#44505c"}}>
+                    {rotulo} <span style={{opacity:.75,fontWeight:400}}>{quantos}</span>
+                  </button>
+                );
+              })}
+          </div>
           <input type="text" value={busca} onChange={e=>setBusca(e.target.value)}
             placeholder="Buscar por nome, matrícula ou função" />
           <div style={{marginTop:10}}>
             {carregando && !lista.length && <p style={{color:"#888",fontSize:13}}>Carregando…</p>}
-            {!carregando && !filtrada.length && <p style={{color:"#888",fontSize:13}}>Ninguém encontrado.</p>}
+            {!carregando && !filtrada.length && (
+              <p style={{color:"#888",fontSize:13}}>
+                Ninguém encontrado
+                {situacaoFiltro!=="todos" && <span> entre os <b>{situacaoFiltro==="ativo"?"ativos":situacaoFiltro+"s"}</b></span>}
+                {busca.trim() && <span> com "{busca.trim()}"</span>}.
+                {situacaoFiltro!=="todos" && <a onClick={()=>setSituacaoFiltro("todos")}
+                  style={{color:"#185FA5",cursor:"pointer",marginLeft:6}}>Ver todos</a>}
+              </p>
+            )}
             {filtrada.map(c=>(
               <div key={c.codigo} style={{display:"flex",alignItems:"center",gap:10,padding:"9px 0",
                                           borderBottom:"1px solid #f0f0f0",flexWrap:"wrap"}}>
