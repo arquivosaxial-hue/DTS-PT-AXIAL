@@ -153,7 +153,7 @@
 
   <script type="text/babel">
     const { useState, useRef, useEffect } = React;
-    const APP_VERSION = "V20";
+    const APP_VERSION = "V21";
 
     // ===== CONFIG SUPABASE =====
     const SUPABASE_URL = "https://atbkjmvogkuekrcoevkn.supabase.co";
@@ -1792,6 +1792,25 @@
       return campos.map(c=>c.trim());
     }
 
+    // A matrícula é a chave primária do efetivo, e é TEXT para preservar os zeros à
+    // esquerda ('001104'). O preço disso: '1254' e '001254' são chaves DIFERENTES para
+    // o banco, e a mesma pessoa vira dois cadastros.
+    //
+    // Aconteceu de verdade em 18/11/2026: Fellyppe e Gabriel ficaram duplicados, cada
+    // um com uma matrícula ativa cheia de documento e uma órfã sem nenhum. Basta uma
+    // planilha em que o Excel tenha tratado a coluna como número para o zero sumir.
+    //
+    // A regra: matrícula só de dígitos é preenchida com zeros até 6 — o formato da casa
+    // (001104, 000767). Código com letra (IBISA01) e código com mais de 6 dígitos ficam
+    // como estão, porque aí o padrão é outro e adivinhar seria pior.
+    const MATRICULA_DIGITOS = 6;
+    function normalizarMatricula(bruta){
+      const s = String(bruta == null ? "" : bruta).replace(/^'/, "").trim();
+      if(!/^[0-9]+$/.test(s)) return s;              // tem letra: não mexe
+      if(s.length >= MATRICULA_DIGITOS) return s;    // já tem o tamanho: não mexe
+      return s.padStart(MATRICULA_DIGITOS, "0");
+    }
+
     // Aceita os cabeçalhos como saem da planilha do RH, com ou sem acento.
     function acharColuna(cabecalho, nomes){
       const norm = s => String(s||"").toLowerCase()
@@ -1852,16 +1871,19 @@
 
       const ok=[], ruins=[];
       const vistos=new Set();
+      let ajustadas=0;
       for(let i=iCab+1;i<linhas.length;i++){
         const c = lerLinhaCSV(linhas[i], sep);
-        // Matrícula é TEXTO: '001104' com zeros à esquerda. Se o Excel tiver comido
-        // os zeros, o vínculo com a planilha do RH quebra — e não há como adivinhar.
-        const codigo = (c[iCod]||"").replace(/^'/,"").trim();
+        // Matrícula é TEXTO: '001104' com zeros à esquerda. Se o Excel tiver comido os
+        // zeros, normalizarMatricula() os devolve — é o que impede o mesmo colaborador
+        // de entrar duas vezes, uma como '1254' e outra como '001254'.
+        const codigo = normalizarMatricula(c[iCod]);
         const nome   = (c[iNom]||"").trim();
         if(!codigo && !nome) continue;
         if(!codigo || !nome){ ruins.push({ linha:i+1, motivo:"código ou nome em branco" }); continue; }
         if(vistos.has(codigo)){ ruins.push({ linha:i+1, motivo:"código "+codigo+" repetido na planilha" }); continue; }
         vistos.add(codigo);
+        if(codigo !== String(c[iCod]||"").replace(/^'/,"").trim()) ajustadas++;
         const sitBruta = (iSit>=0 ? (c[iSit]||"") : "").toLowerCase();
         const situacao = /desligad|demitid|inativ/.test(sitBruta) ? "desligado"
                        : /afastad|licen/.test(sitBruta) ? "afastado" : "ativo";
@@ -1870,7 +1892,7 @@
         // o que não se usa é o oposto do que a LGPD pede (ver 2.5).
         ok.push({ codigo, nome, funcao: iFun>=0 ? (c[iFun]||"").trim() : "", situacao });
       }
-      return { linhas:ok, ruins };
+      return { linhas:ok, ruins, ajustadas };
     }
 
     // ===== EQUIPE DE UM DOCUMENTO =====
@@ -2031,7 +2053,7 @@
       const ativos = lista.filter(c=>c.situacao==="ativo").length;
 
       async function salvarUm(){
-        const codigo=novo.codigo.trim(), nome=novo.nome.trim();
+        const codigo=normalizarMatricula(novo.codigo), nome=novo.nome.trim();
         if(!codigo || !nome){ setErro("Matrícula e nome são obrigatórios."); return; }
         setCarregando(true); setErro(""); setMsg("");
         try{
@@ -2171,9 +2193,18 @@
             <div style={{border:"1px solid #dbe6f2",background:"#f7fafd",borderRadius:10,
                          padding:"12px 14px",marginTop:12}}>
               <p style={{margin:"0 0 8px",fontSize:13,color:"#0C447C"}}>
-                <b>{previa.linhas.length} linha(s) lidas.</b> Confira os acentos e os zeros à
-                esquerda da matrícula antes de importar.
+                <b>{previa.linhas.length} linha(s) lidas.</b> Confira os acentos antes de importar.
               </p>
+              {previa.ajustadas > 0 && (
+                // Sem este aviso a correção seria invisível, e invisível é como um dia
+                // alguém "conserta" a normalização achando que ela não faz nada.
+                <p style={{fontSize:12,color:"#0C447C",background:"#E6F1FB",border:"1px solid #BBD6F0",
+                           borderRadius:8,padding:"8px 10px",margin:"0 0 10px"}}>
+                  <b>{previa.ajustadas} matrícula(s) vieram sem os zeros à esquerda</b> e foram
+                  completadas para {MATRICULA_DIGITOS} dígitos — é o que evita cadastrar a mesma
+                  pessoa duas vezes.
+                </p>
+              )}
               <label style={{fontSize:13,display:"flex",alignItems:"center",gap:8,margin:"0 0 10px",color:"#333"}}>
                 <input type="checkbox" checked={desligarAusentes}
                   onChange={e=>setDesligarAusentes(e.target.checked)} />

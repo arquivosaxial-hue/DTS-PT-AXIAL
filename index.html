@@ -160,7 +160,7 @@ const {
   useRef,
   useEffect
 } = React;
-const APP_VERSION = "V20";
+const APP_VERSION = "V21";
 
 // ===== CONFIG SUPABASE =====
 const SUPABASE_URL = "https://atbkjmvogkuekrcoevkn.supabase.co";
@@ -3312,6 +3312,25 @@ function lerLinhaCSV(linha, sep) {
   return campos.map(c => c.trim());
 }
 
+// A matrícula é a chave primária do efetivo, e é TEXT para preservar os zeros à
+// esquerda ('001104'). O preço disso: '1254' e '001254' são chaves DIFERENTES para
+// o banco, e a mesma pessoa vira dois cadastros.
+//
+// Aconteceu de verdade em 18/11/2026: Fellyppe e Gabriel ficaram duplicados, cada
+// um com uma matrícula ativa cheia de documento e uma órfã sem nenhum. Basta uma
+// planilha em que o Excel tenha tratado a coluna como número para o zero sumir.
+//
+// A regra: matrícula só de dígitos é preenchida com zeros até 6 — o formato da casa
+// (001104, 000767). Código com letra (IBISA01) e código com mais de 6 dígitos ficam
+// como estão, porque aí o padrão é outro e adivinhar seria pior.
+const MATRICULA_DIGITOS = 6;
+function normalizarMatricula(bruta) {
+  const s = String(bruta == null ? "" : bruta).replace(/^'/, "").trim();
+  if (!/^[0-9]+$/.test(s)) return s; // tem letra: não mexe
+  if (s.length >= MATRICULA_DIGITOS) return s; // já tem o tamanho: não mexe
+  return s.padStart(MATRICULA_DIGITOS, "0");
+}
+
 // Aceita os cabeçalhos como saem da planilha do RH, com ou sem acento.
 function acharColuna(cabecalho, nomes) {
   const norm = s => String(s || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
@@ -3381,11 +3400,13 @@ function lerPlanilhaEfetivo(texto) {
   const ok = [],
     ruins = [];
   const vistos = new Set();
+  let ajustadas = 0;
   for (let i = iCab + 1; i < linhas.length; i++) {
     const c = lerLinhaCSV(linhas[i], sep);
-    // Matrícula é TEXTO: '001104' com zeros à esquerda. Se o Excel tiver comido
-    // os zeros, o vínculo com a planilha do RH quebra — e não há como adivinhar.
-    const codigo = (c[iCod] || "").replace(/^'/, "").trim();
+    // Matrícula é TEXTO: '001104' com zeros à esquerda. Se o Excel tiver comido os
+    // zeros, normalizarMatricula() os devolve — é o que impede o mesmo colaborador
+    // de entrar duas vezes, uma como '1254' e outra como '001254'.
+    const codigo = normalizarMatricula(c[iCod]);
     const nome = (c[iNom] || "").trim();
     if (!codigo && !nome) continue;
     if (!codigo || !nome) {
@@ -3403,6 +3424,7 @@ function lerPlanilhaEfetivo(texto) {
       continue;
     }
     vistos.add(codigo);
+    if (codigo !== String(c[iCod] || "").replace(/^'/, "").trim()) ajustadas++;
     const sitBruta = (iSit >= 0 ? c[iSit] || "" : "").toLowerCase();
     const situacao = /desligad|demitid|inativ/.test(sitBruta) ? "desligado" : /afastad|licen/.test(sitBruta) ? "afastado" : "ativo";
     // Só três campos atravessam para o banco. A planilha do RH traz CPF, salário
@@ -3417,7 +3439,8 @@ function lerPlanilhaEfetivo(texto) {
   }
   return {
     linhas: ok,
-    ruins
+    ruins,
+    ajustadas
   };
 }
 
@@ -3670,7 +3693,7 @@ function TelaEfetivo({
   }, {});
   const ativos = lista.filter(c => c.situacao === "ativo").length;
   async function salvarUm() {
-    const codigo = novo.codigo.trim(),
+    const codigo = normalizarMatricula(novo.codigo),
       nome = novo.nome.trim();
     if (!codigo || !nome) {
       setErro("Matrícula e nome são obrigatórios.");
@@ -3920,7 +3943,21 @@ function TelaEfetivo({
       fontSize: 13,
       color: "#0C447C"
     }
-  }, /*#__PURE__*/React.createElement("b", null, previa.linhas.length, " linha(s) lidas."), " Confira os acentos e os zeros \xE0 esquerda da matr\xEDcula antes de importar."), /*#__PURE__*/React.createElement("label", {
+  }, /*#__PURE__*/React.createElement("b", null, previa.linhas.length, " linha(s) lidas."), " Confira os acentos antes de importar."), previa.ajustadas > 0 &&
+  /*#__PURE__*/
+  // Sem este aviso a correção seria invisível, e invisível é como um dia
+  // alguém "conserta" a normalização achando que ela não faz nada.
+  React.createElement("p", {
+    style: {
+      fontSize: 12,
+      color: "#0C447C",
+      background: "#E6F1FB",
+      border: "1px solid #BBD6F0",
+      borderRadius: 8,
+      padding: "8px 10px",
+      margin: "0 0 10px"
+    }
+  }, /*#__PURE__*/React.createElement("b", null, previa.ajustadas, " matr\xEDcula(s) vieram sem os zeros \xE0 esquerda"), " e foram completadas para ", MATRICULA_DIGITOS, " d\xEDgitos \u2014 \xE9 o que evita cadastrar a mesma pessoa duas vezes."), /*#__PURE__*/React.createElement("label", {
     style: {
       fontSize: 13,
       display: "flex",
